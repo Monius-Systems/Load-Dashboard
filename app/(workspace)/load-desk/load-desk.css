@@ -1096,36 +1096,58 @@ details[open] > .ld-section-summary .ld-section-chevron {
 /* The head is a form, not a flowing document.
  *
  * Every block on it -- the invoice number, the date, the truck, BILL TO, the
- * word INVOICE and the company -- is placed by coordinates on the paper, so
- * it prints in the same spot on every invoice. Laid out by their own contents
- * instead, as they were, they shove each other about: a client with a long
- * name widened its column and pushed the word INVOICE off the centre of the
- * page, a five-digit invoice number stepped down a size and lifted BILL TO
- * with it, and a company with one address line less raised the table. Two
- * invoices a week apart came out as two different sheets. Now only what is
- * written in each block changes, never where the block is. */
+ * word INVOICE and the company -- prints in the same spot on every invoice.
+ * Laid out by their own contents, as they were, they shove each other about: a
+ * client with a long name widened its column and pushed the word INVOICE off
+ * the centre of the page, a five-digit invoice number stepped down a size and
+ * lifted BILL TO with it, and a company with one address line less raised the
+ * table. Two invoices a week apart came out as two different sheets.
+ *
+ * The places are held by grid tracks of a fixed size rather than by offsets
+ * from a corner. Offsets were the first attempt and they printed wrong: Safari
+ * resolved them against the sheet of paper instead of against this block, so
+ * the whole head came out three-eighths of an inch high and the top line of it
+ * -- the invoice number, the word INVOICE, the company's name -- was sliced
+ * off against the edge of the page. Nothing here is taken out of the flow now.
+ * Only what is written in each block changes, never where the block is. */
 .invoice-head {
-  position: relative;
-  /* The table meets the same line on every invoice, whether BILL TO runs to
-     two lines or to five: the name, four address lines and a telephone
-     number all fit inside this band. */
-  height: 208px;
+  display: grid;
+  /* The left column runs up to the word INVOICE; the right is the company
+     block against the right edge; the middle is what is left between them.
+     Both outer widths are fixed, so a long name is set smaller to fit its
+     column (see nameLayout in invoice-sheet.tsx) rather than widening it. */
+  grid-template-columns: 36.75% 1fr 35%;
+  /* The band the head is allowed, so the table meets the same line on every
+     invoice whether BILL TO runs to two lines or to five: the name, four
+     address lines and a telephone number all fit inside it. A fixed track
+     does not grow to its contents, which is the point of it. */
+  grid-template-rows: 208px;
+  align-items: start;
+}
+.invoice-details {
+  grid-area: 1 / 1;
+  display: grid;
+  /* The meta rows have the first track; BILL TO starts where it ends, on its
+     own line, so a long invoice number cannot push it about. */
+  grid-template-rows: 118px auto;
+  align-items: start;
+}
+/* The word sits across the whole head, not in the middle column, so it centres
+   on the paper itself and neither neighbour can move it. The three of them
+   share the one grid row; they do not collide, because what is under the word
+   is the gap the two columns leave between them. */
+.invoice-title {
+  grid-area: 1 / 1 / 2 / 4;
+  margin-top: 4px;
 }
 .invoice-seller {
-  position: absolute;
-  top: 4px;
-  right: 0;
-  /* The same width as the details opposite -- about half of what the word
-     INVOICE leaves on the 10.2in page -- so the company name is centred
-     between that word and the right edge of the paper on every invoice,
-     whatever its address lines say. */
-  width: 35%;
+  grid-area: 1 / 3;
+  margin-top: 4px;
   display: grid;
   font-size: 12px;
   line-height: 1.25;
   text-align: center;
 }
-/* Its size comes from the measurement, as the client's name opposite does. */
 .invoice-seller strong {
   font-weight: 700;
 }
@@ -1142,14 +1164,6 @@ details[open] > .ld-section-summary .ld-section-chevron {
 .invoice-billto > div > * {
   white-space: nowrap;
 }
-/* The word on the centre line of the paper itself, rather than in a column
-   between its neighbours, so neither of them can move it. */
-.invoice-title {
-  position: absolute;
-  top: 4px;
-  left: 0;
-  right: 0;
-}
 .invoice-word {
   font-size: 40px;
   font-weight: 800;
@@ -1160,47 +1174,23 @@ details[open] > .ld-section-summary .ld-section-chevron {
   line-height: 1;
   text-align: center;
 }
-.invoice-details {
-  position: absolute;
-  top: 0;
-  left: 0;
-  /* Fixed: a long client name is set smaller to fit this column (see
-     nameLayout) rather than allowed to widen it and push the word INVOICE off
-     the centre of the page. The column ends about 9px short of the word's
-     first letter, and that gap is the whole of the clearance -- so it is the
-     width itself, not padding. Padding would not do the job: the rows inside
-     are placed against this box's padding edge, not its text, and would sit
-     in the gutter meant to keep them out of the word. */
-  width: 36.75%;
-}
+/* Three rows on fixed lines: the truck number sits at the same height whether
+   the invoice number above it is four digits or fourteen. */
 .invoice-meta {
-  position: relative;
-  /* Three rows on fixed lines: the truck number sits at the same height
-     whether the invoice number above it is four digits or fourteen. */
-  height: 91px;
+  display: grid;
+  grid-template-rows: 36px 36px auto;
+  align-items: start;
 }
 /* Each value sits right after its title; the titles share a width so the
-   values line up under each other. The row is aligned on its foot rather
-   than on the text's baseline, because a baseline is drawn by whichever
-   print in the row is largest -- so a long invoice number, set smaller to
-   fit, would have lifted its own label. */
+   values line up under each other. The row is aligned on its foot rather than
+   on the text's baseline, because a baseline is drawn by whichever print in
+   the row is largest -- so a long invoice number, set smaller to fit, would
+   have lifted its own label. */
 .invoice-meta div {
-  position: absolute;
-  left: 0;
-  right: 0;
   display: flex;
   align-items: flex-end;
   gap: 14px;
   height: 19px;
-}
-.invoice-meta div:nth-child(1) {
-  top: 0;
-}
-.invoice-meta div:nth-child(2) {
-  top: 36px;
-}
-.invoice-meta div:nth-child(3) {
-  top: 72px;
 }
 .invoice-meta dt {
   /* Fixed, not a minimum: it sets where the values begin. */
@@ -1230,10 +1220,6 @@ details[open] > .ld-section-summary .ld-section-chevron {
    whatever height the rows above happen to come to; its label shares the
    titles' width so the client lines up with the values above. */
 .invoice-billto {
-  position: absolute;
-  top: 118px;
-  left: 0;
-  right: 0;
   display: flex;
   align-items: baseline;
   gap: 14px;
@@ -1349,30 +1335,38 @@ details[open] > .ld-section-summary .ld-section-chevron {
 .ld-print-root {
   display: none;
 }
+
+/* US Letter, turned sideways. Stated here so the browser turns the paper
+ * itself rather than leaving it to whoever is standing at the printer.
+ *
+ * At the top level of the sheet rather than inside the @media print block
+ * below: @page only ever applies to print anyway, and nested inside a media
+ * rule it is one more thing for a browser to get wrong. The size is given as
+ * two lengths rather than as `letter landscape` for the same reason -- it is
+ * the plainer of the two spellings, and 11in by 8.5in is exactly what Letter
+ * turned sideways measures.
+ *
+ * The first page has no margin at all. The address, the date and "Page 1 of
+ * 1" are the browser's, and it prints them into the margin of the page; there
+ * is no way to ask it not to, but a page with no margin has nowhere to put
+ * them, so they go. The margin comes back as the print root's own padding,
+ * which is inside the page and ours to leave empty.
+ *
+ * Padding only opens at the top of the first page, though, and at the foot of
+ * the last: an invoice long enough to run on was sliced against the top edge
+ * of the paper, column headings and all. So every page after the first takes
+ * its margin from the page instead. Those are continuation pages -- having
+ * the browser's own line printed up there is a smaller price than having the
+ * table cut. The sides come from the padding throughout, which does open on
+ * every page. */
+@page {
+  size: 11in 8.5in;
+  margin: 0.4in 0;
+}
+@page :first {
+  margin: 0;
+}
 @media print {
-  /* US Letter, turned sideways. Stated here so the browser turns the paper
-   * itself rather than leaving it to whoever is standing at the printer.
-   *
-   * The first page has no margin at all. The address, the date and "Page 1 of
-   * 1" are the browser's, and it prints them into the margin of the page;
-   * there is no way to ask it not to, but a page with no margin has nowhere to
-   * put them, so they go. The margin comes back as the print root's own
-   * padding, which is inside the page and ours to leave empty.
-   *
-   * Padding only opens at the top of the first page, though, and at the foot
-   * of the last: an invoice long enough to run on was sliced against the top
-   * edge of the paper, column headings and all. So every page after the first
-   * takes its margin from the page instead. Those are continuation pages —
-   * having the browser's own line printed up there is a smaller price than
-   * having the table cut. The sides come from the padding throughout, which
-   * does open on every page. */
-  @page {
-    size: letter landscape;
-    margin: 0.4in 0;
-  }
-  @page :first {
-    margin: 0;
-  }
   /* What is being printed is paper, and paper is not the window it was looked
    * at in.
    *
