@@ -279,20 +279,34 @@ export function ledgerCsv(records: SavedRecord[]): string {
 }
 
 /**
- * Which size the BILL TO client name is set at on an invoice, so it stays on
- * one line.
+ * How large a name may be set to fit the width it has been given.
  *
- * The name is the widest thing in the left column, and the column is sized to
- * its contents: left at full size, a long name widens the column and pushes
- * into the word INVOICE beside it, or off the edge of the page. The steps were
- * measured in a browser against the printed sheet width — see
- * .invoice-billto strong in load-desk.css.
+ * The two names at the top of an invoice -- the client's on the left and the
+ * company's own on the right -- sit in blocks of a fixed width, so that the
+ * word INVOICE stays on the centre of the page and the company block stays
+ * centred beside it whoever is being billed. A name too long for its block
+ * therefore gives way instead of the block: it is set at the largest size
+ * that fits, rather than widening the column and shoving the rest of the
+ * sheet about.
+ *
+ * `width` is what the name measures at 100px, so the size that exactly fills
+ * `room` is `room / width * 100`. It is taken down to the half pixel, held
+ * between `min` and `max`, and reported as `wrapped` when even `min` is too
+ * wide -- there are no sizes left to give up, and the caller lets the name
+ * take a second line rather than run off the edge of the paper.
  */
-export function billToFit(name: string): 'medium' | 'small' | undefined {
-  const length = name.trim().length;
-  if (length > 30) return 'small';
-  if (length > 22) return 'medium';
-  return undefined;
+export function nameFit(
+  width: number,
+  room: number,
+  max: number,
+  min: number,
+): { size: number; wrapped: boolean } {
+  if (width <= 0) return { size: max, wrapped: false };
+  // Halves of a pixel, counted before the division rather than after it: a
+  // size that lands exactly on a half comes out a hair under it otherwise,
+  // and is rounded down a whole step for nothing.
+  const fits = Math.floor((room * 200) / width) / 2;
+  return { size: Math.min(max, Math.max(min, fits)), wrapped: fits < min };
 }
 
 /** A file size in the words a person uses for one. */

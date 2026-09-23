@@ -10,7 +10,6 @@ import {
   subscribeProfiles,
 } from '@/lib/load-desk/profiles';
 import {
-  billToFit,
   displayDate,
   invoiceDestination,
   invoiceFuel,
@@ -19,6 +18,7 @@ import {
   invoiceTons,
   lineTotal,
   money,
+  nameFit,
 } from '@/lib/load-desk/format';
 import { unresolvedCritical } from '@/lib/load-desk/recovery';
 import type { InvoiceDraft, SavedRecord, Ticket } from '@/lib/load-desk/types';
@@ -55,48 +55,114 @@ const marked = (
     ? `${text}${UNCONFIRMED}`
     : text;
 
-const COLUMNS = [
-  'Date',
-  'Ticket #',
-  'Customer name',
-  'Origin',
-  'Destination',
-  'Net Tons',
-  'Rate',
-  'Fuel Charge',
-  'Total',
+/**
+ * The columns, and the share of the table each one takes.
+ *
+ * The widths are fixed rather than sized to what is in them, so a column edge
+ * falls in the same place on every invoice: two invoices printed a week apart
+ * lay their figures out identically, and a reader who knows where the tonnage
+ * sits keeps knowing. Each width holds its own heading at the heading size,
+ * and the widths of the text columns were set from the longest plant name,
+ * delivery address and client name that turn up on a real sheet. A line
+ * longer than that is set smaller to fit the column it is given -- the print
+ * moves, the grid does not. The shares add up to 100.
+ */
+const COLUMNS: { name: string; width: number }[] = [
+  { name: 'Date', width: 6.8 },
+  { name: 'Ticket #', width: 8.4 },
+  { name: 'Customer name', width: 17 },
+  { name: 'Origin', width: 18.6 },
+  { name: 'Destination', width: 21.4 },
+  { name: 'Net Tons', width: 6.3 },
+  { name: 'Rate', width: 7 },
+  { name: 'Fuel Charge', width: 8 },
+  { name: 'Total', width: 6.5 },
 ];
 /** The reference invoice has room for 15 lines; longer invoices grow. */
 const MIN_ROWS = 15;
 
 
 /**
- * Table width in CSS pixels. The sheet is US Letter landscape (11 in) with
- * 0.4 in margins, leaving 10.2 in (979px) on screen and on paper; this keeps
- * a little room to spare.
+ * The width of the page inside its margins, in CSS pixels: US Letter
+ * landscape (11 in) less 0.4 in of margin on each side is 10.2 in, or 979px,
+ * on screen and on paper alike.
+ */
+const PAGE_WIDTH = 979;
+/**
+ * Table width used when measuring. The table fills the page, but measuring
+ * against a little less keeps room to spare for a font that comes out
+ * slightly wider on the printer than it did in the browser.
  */
 const TABLE_WIDTH = 960;
 /** Horizontal cell padding plus borders, per column. */
 const CELL_CHROME = 12;
 const LINE_FONT = 'Arial, Helvetica, sans-serif';
-const HEADER_FONT = 'bold 12px "Times New Roman", Times, serif';
 const MAX_LINE_SIZE = 11;
 /** Smallest size that stays readable on paper. */
 const MIN_LINE_SIZE = 7;
+/**
+ * How small a single column may be set when its own text will not fit at the
+ * readable minimum -- a delivery address twice the length of any other. Only
+ * that column steps down this far, and only rather than print over the column
+ * edge beside it. The sheet is never scaled as a whole: that would move the
+ * invoice number, the date and the company block, which stay put.
+ */
+const FLOOR_LINE_SIZE = 5;
 
 /**
- * Largest ticket-line font size (px) at which every cell fits on one line.
- * If lines are too long even at the minimum size, the whole sheet is zoomed
- * out so everything still fits the page on single lines. Text is measured
- * with a canvas, so this also works for the hidden print copy.
+ * The room each of the two names at the top of the sheet has, and the sizes
+ * they may be set at. These mirror the fixed blocks in load-desk.css, which
+ * is where the widths themselves are set:
+ *
+ * - the client's name has what .invoice-details leaves over once the BILL TO
+ *   label and the gap after it are taken off;
+ * - the company's name has the whole of .invoice-seller.
+ *
+ * Neither is allowed smaller than the address lines printed under it: a name
+ * set smaller than its own street address reads as a mistake rather than as a
+ * fit. Below that they wrap instead.
  */
-function lineLayout(rows: string[][]): { size: number; zoom: number } {
-  const fallback = { size: MAX_LINE_SIZE, zoom: 1 };
+const BILL_TO = {
+  room: PAGE_WIDTH * 0.3675 - 88 - 14,
+  max: 17,
+  min: 13,
+  /** .invoice-billto strong is tracked out; letter spacing takes width too. */
+  tracking: 0.04,
+};
+const SELLER = { room: PAGE_WIDTH * 0.35, max: 15, min: 12, tracking: 0 };
+
+/**
+ * What a name measures at 100px, letter spacing included -- spacing follows
+ * every letter, so it adds `tracking` of the size for each one.
+ */
+const nameWidth = (
+  context: CanvasRenderingContext2D,
+  text: string,
+  weight: number,
+  tracking: number,
+) => {
+  context.font = `${weight} 100px ${LINE_FONT}`;
+  return context.measureText(text).width + tracking * 100 * text.length;
+};
+
+/**
+ * The ticket-line font size for each column: the largest at which that
+ * column's longest value still fits the fixed width the column is given.
+ *
+ * Every column shares one size, the largest that suits them all, so the lines
+ * read as one table rather than nine. A column whose text will not fit even
+ * at the readable minimum is the exception, and is set smaller on its own.
+ * Text is measured with a canvas, so this also works for the hidden print
+ * copy, which is never on screen to be measured any other way.
+ */
+function lineLayout(rows: string[][]): { size: number; columns: number[] } {
+  const fallback = {
+    size: MAX_LINE_SIZE,
+    columns: COLUMNS.map(() => MAX_LINE_SIZE),
+  };
   if (!rows.length || typeof document === 'undefined') return fallback;
   const context = document.createElement('canvas').getContext('2d');
   if (!context) return fallback;
-  context.font = HEADER_FONT;
-  const headers = COLUMNS.map((column) => context.measureText(column).width);
   // Measure at 100px and scale; tiny canvas font sizes measure imprecisely.
   context.font = `bold 100px ${LINE_FONT}`;
   const perPixel = COLUMNS.map(
@@ -104,18 +170,39 @@ function lineLayout(rows: string[][]): { size: number; zoom: number } {
       Math.max(...rows.map((row) => context.measureText(row[column]).width)) /
       100,
   );
-  const tableWidth = (size: number) =>
-    COLUMNS.reduce(
-      (sum, _, column) =>
-        sum + Math.max(headers[column], perPixel[column] * size) + CELL_CHROME,
-      0,
+  const fits = COLUMNS.map((column, index) => {
+    const room = (TABLE_WIDTH * column.width) / 100 - CELL_CHROME;
+    for (let size = MAX_LINE_SIZE; size > FLOOR_LINE_SIZE; size -= 0.5) {
+      if (perPixel[index] * size <= room) return size;
+    }
+    return FLOOR_LINE_SIZE;
+  });
+  const size = Math.max(MIN_LINE_SIZE, Math.min(...fits));
+  return { size, columns: fits.map((fit) => Math.min(size, fit)) };
+}
+
+/**
+ * The size for each of the two names at the top of the sheet, measured the
+ * same way the ticket lines are and for the same reason: the blocks they sit
+ * in do not move, so the names are what gives.
+ */
+function nameLayout(billToName: string, sellerName: string) {
+  const whole = (spec: typeof BILL_TO) => ({ size: spec.max, wrapped: false });
+  const context =
+    typeof document === 'undefined'
+      ? null
+      : document.createElement('canvas').getContext('2d');
+  if (!context) return { billTo: whole(BILL_TO), seller: whole(SELLER) };
+  const fit = (text: string, spec: typeof BILL_TO, weight: number) =>
+    nameFit(
+      nameWidth(context, text, weight, spec.tracking),
+      spec.room,
+      spec.max,
+      spec.min,
     );
-  for (let size = MAX_LINE_SIZE; size >= MIN_LINE_SIZE; size -= 0.5) {
-    if (tableWidth(size) <= TABLE_WIDTH) return { size, zoom: 1 };
-  }
   return {
-    size: MIN_LINE_SIZE,
-    zoom: Math.floor((TABLE_WIDTH / tableWidth(MIN_LINE_SIZE)) * 100) / 100,
+    billTo: fit(billToName, BILL_TO, 700),
+    seller: fit(sellerName, SELLER, 700),
   };
 }
 
@@ -138,7 +225,9 @@ export default function InvoiceSheet({
   );
   const lines = invoiceLines.map((line) => line.ticket);
   const sellerLines = sellerAddressLines(company);
+  const seller = sellerName(company) || 'Set your company name in Account';
   const billTo = invoice.bill_to;
+  const names = nameLayout(billTo.name, seller);
   const rows = lines.map((ticket, index) => {
     const date = displayDate(ticket.ticket_date);
     const previous =
@@ -179,7 +268,6 @@ export default function InvoiceSheet({
     <article
       className="invoice-sheet"
       aria-label={`Invoice ${invoice.invoice_number}`}
-      style={layout.zoom < 1 ? { zoom: layout.zoom } : undefined}
     >
       <div className="invoice-head">
         {/* Invoice details, then Bill To under the truck number, against the
@@ -215,7 +303,12 @@ export default function InvoiceSheet({
           <div className="invoice-billto">
             <span>BILL TO:</span>
             <div>
-              <strong data-fit={billToFit(billTo.name)}>{billTo.name}</strong>
+              <strong
+                style={{ fontSize: `${names.billTo.size}px` }}
+                data-wrapped={names.billTo.wrapped || undefined}
+              >
+                {billTo.name}
+              </strong>
               {billTo.address_lines
                 .filter((text) => text.trim())
                 .map((text) => (
@@ -234,7 +327,12 @@ export default function InvoiceSheet({
         <div className="invoice-seller">
           {/* Invoices are always English. An unset company says so plainly
               rather than leaving the line where a name belongs empty. */}
-          <strong>{sellerName(company) || 'Set your company name in Account'}</strong>
+          <strong
+            style={{ fontSize: `${names.seller.size}px` }}
+            data-wrapped={names.seller.wrapped || undefined}
+          >
+            {seller}
+          </strong>
           {sellerLines.map((text, index) => (
             <span key={`${index}-${text}`}>{text}</span>
           ))}
@@ -247,11 +345,18 @@ export default function InvoiceSheet({
           { '--invoice-line-size': `${layout.size}px` } as CSSProperties
         }
       >
+        {/* The grid itself, declared once and printed the same every time.
+            See COLUMNS. */}
+        <colgroup>
+          {COLUMNS.map((column) => (
+            <col key={column.name} style={{ width: `${column.width}%` }} />
+          ))}
+        </colgroup>
         <thead>
           <tr>
             {COLUMNS.map((column) => (
-              <th key={column} scope="col">
-                {column}
+              <th key={column.name} scope="col">
+                {column.name}
               </th>
             ))}
           </tr>
@@ -263,14 +368,26 @@ export default function InvoiceSheet({
               className="invoice-line"
             >
               {row.map((value, column) => (
-                <td key={COLUMNS[column]}>{value}</td>
+                <td
+                  key={COLUMNS[column].name}
+                  // Only a column whose text would not fit at the size the
+                  // rest of the table shares carries one of its own; see
+                  // lineLayout.
+                  style={
+                    layout.columns[column] < layout.size
+                      ? { fontSize: `${layout.columns[column]}px` }
+                      : undefined
+                  }
+                >
+                  {value}
+                </td>
               ))}
             </tr>
           ))}
           {blankRows.map((row) => (
             <tr key={`blank-${row}`}>
               {COLUMNS.map((column) => (
-                <td key={column}>{' '}</td>
+                <td key={column.name}>{' '}</td>
               ))}
             </tr>
           ))}
