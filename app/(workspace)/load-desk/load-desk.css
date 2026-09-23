@@ -1346,6 +1346,16 @@ details[open] > .ld-section-summary .ld-section-chevron {
  * the plainer of the two spellings, and 11in by 8.5in is exactly what Letter
  * turned sideways measures.
  *
+ * Chrome, Edge and Firefox turn the paper from this. Safari does not: it
+ * parses the descriptor and keeps it in the CSSOM, but its print path pays no
+ * attention to it, so the orientation there is whatever the macOS print panel
+ * is set to. That is a one-time setting for whoever prints -- the panel keeps
+ * it with the printer -- and there is nothing this sheet can do about it. The
+ * alternative would be to turn the invoice ourselves when the page comes out
+ * portrait, and a turned block cannot be broken across pages: an invoice long
+ * enough to run on would lose the rest of itself. Lines off a bill is the one
+ * thing worse than a bill the wrong way round.
+ *
  * The first page has no margin at all. The address, the date and "Page 1 of
  * 1" are the browser's, and it prints them into the margin of the page; there
  * is no way to ask it not to, but a page with no margin has nowhere to put
