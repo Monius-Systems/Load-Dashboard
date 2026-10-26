@@ -2,6 +2,10 @@ import { boundedJson } from '@/lib/server/json';
 import { listRecords, saveRecord, updateRecords } from '@/lib/server/load-desk-store';
 import { badRequest, memberRoute } from '@/lib/server/member-route';
 import { parseNewRecord, parseRecordEdits } from '@/lib/load-desk/record-input';
+import type { WorkspaceUser } from '@/lib/server/auth';
+
+/** Who made a change, as a duplicate review's history names them. */
+const actorOf = (member: WorkspaceUser) => member.email ?? member.name ?? member.id;
 
 /** Every saved ticket in the workspace, newest first. */
 export function GET(request: Request) {
@@ -24,7 +28,7 @@ export function POST(request: Request) {
       }
       const parsed = parseNewRecord(body.record);
       if ('error' in parsed) return badRequest(parsed.error);
-      const record = await saveRecord(client, member.workspaceId, parsed.value);
+      const record = await saveRecord(client, member.workspaceId, parsed.value, actorOf(member));
       return Response.json({ record }, { status: 201 });
     },
     { write: true },
@@ -48,7 +52,9 @@ export function PATCH(request: Request) {
       }
       const parsed = parseRecordEdits(body.edits);
       if ('error' in parsed) return badRequest(parsed.error);
-      return Response.json({ records: await updateRecords(client, member.workspaceId, parsed.value) });
+      return Response.json({
+        records: await updateRecords(client, member.workspaceId, parsed.value, actorOf(member)),
+      });
     },
     { write: true },
   );

@@ -680,6 +680,15 @@ export const UNDATED_BATCH = 'batch-undated';
 export const isUndatedBatch = (batchId: string) => batchId === UNDATED_BATCH;
 
 /**
+ * The batch suspected repeats wait in (see duplicates.ts): a page whose ticket
+ * number is already on file, kept with its photograph until a person says
+ * whether it is the same ticket. Like the undated batch it is not an invoice
+ * and never takes a number.
+ */
+export const DUPLICATE_BATCH = 'batch-duplicates';
+export const isDuplicateBatch = (batchId: string) => batchId === DUPLICATE_BATCH;
+
+/**
  * The invoice a ticket photographed for `ticketDate` belongs on: the one the
  * other tickets of that date are already on, or a new batch for a date not filed
  * yet.
@@ -772,7 +781,13 @@ export function invoiceMoveFor(
   // The holding batch for undated tickets is not an invoice: a ticket given
   // its date leaves it whether or not anything is left behind, onto an
   // invoice of its own.
-  if (!leftBehind && !(isUndatedBatch(ticket.batchId) && ticketDay(ticket.date))) {
+  // Nor is the batch suspected repeats wait in: one found to be a different
+  // ticket leaves it for its date's invoice.
+  if (
+    !leftBehind &&
+    !(isUndatedBatch(ticket.batchId) && ticketDay(ticket.date)) &&
+    !isDuplicateBatch(ticket.batchId)
+  ) {
     return { kind: 'stay' };
   }
   const numbers = [...others]

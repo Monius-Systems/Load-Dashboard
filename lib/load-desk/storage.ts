@@ -12,6 +12,7 @@ import {
   strandedDated,
 } from './records';
 import { ticketDay } from './ticket-date.ts';
+import { isHeldDuplicate } from './duplicates.ts';
 import { getProfilesSnapshot } from './profiles.ts';
 import type { SavedRecord } from './types';
 
@@ -21,7 +22,14 @@ import type { SavedRecord } from './types';
 // IndexedDB instead; it is never available in a production build.
 
 export type RecordsSnapshot = {
+  /**
+   * The tickets of the books: everything but the suspected duplicates held
+   * for review (see duplicates.ts). Every invoice, total, chart and number is
+   * worked out from these, so a held page cannot reach any of them.
+   */
   records: SavedRecord[];
+  /** Suspected duplicates: waiting for review, or found to be repeats. */
+  held: SavedRecord[];
   error: string | null;
   ready: boolean;
   mode: DataMode | null;
@@ -35,6 +43,7 @@ export type RecordDraft = Omit<SavedRecord, 'id' | 'original_stored'> & {
 const RECORDS_KEY = 'monius-demo.load-desk.records.v1';
 const SERVER_SNAPSHOT: RecordsSnapshot = {
   records: [],
+  held: [],
   error: null,
   ready: false,
   mode: null,
@@ -44,10 +53,22 @@ let snapshot: RecordsSnapshot = SERVER_SNAPSHOT;
 let loading = false;
 const listeners = new Set<() => void>();
 
-function publish(next: RecordsSnapshot) {
-  snapshot = next;
+/**
+ * Publishes the records. `next.records` is every record, held or not; they
+ * are sorted into the books and the held ones here, the one place records
+ * come in, so nothing reading the store has to remember to leave them out.
+ */
+function publish(next: Omit<RecordsSnapshot, 'held'>) {
+  snapshot = {
+    ...next,
+    records: next.records.filter((record) => !isHeldDuplicate(record)),
+    held: next.records.filter(isHeldDuplicate),
+  };
   for (const listener of listeners) listener();
 }
+
+/** Every record, held or not: what is stored, as the store writes it. */
+const everything = () => [...snapshot.records, ...snapshot.held];
 
 function isSavedRecord(value: unknown): value is SavedRecord {
   if (!value || typeof value !== 'object') return false;
@@ -62,7 +83,7 @@ function isSavedRecord(value: unknown): value is SavedRecord {
   );
 }
 
-function readLocalRecords(): RecordsSnapshot {
+function readLocalRecords(): Omit<RecordsSnapshot, 'held'> {
   let raw: string | null;
   try {
     raw = window.localStorage.getItem(RECORDS_KEY);
@@ -105,7 +126,7 @@ const dated = (records: SavedRecord[]) => {
  * as records rather than as edits, so nothing is marked checked or edited by
  * the repair; later reads find nothing to repair.
  */
-function readRepairedLocalRecords(): RecordsSnapshot {
+function readRepairedLocalRecords(): Omit<RecordsSnapshot, 'held'> {
   const read = readLocalRecords();
   const repaired = read.error ? [] : staleInvoiceDates(read.records);
   if (!repaired.length) return read;
@@ -239,7 +260,7 @@ export async function saveRecord(
       body: JSON.stringify({ record: { ...draft, original_stored: true } }),
     });
     if (!result.ok) return { error: result.error };
-    publish({ ...snapshot, records: [result.data.record, ...snapshot.records] });
+    publish({ ...snapshot, records: [result.data.record, ...everything()] });
     return { record: result.data.record };
   }
   if (mode !== 'local') return { error: 'Your session has ended. Sign in again to save.' };
@@ -253,9 +274,9 @@ export async function saveRecord(
   const record: SavedRecord = {
     ...draft,
     original_stored: originalStored,
-    id: snapshot.records.reduce((max, item) => Math.max(max, item.id), 0) + 1,
+    id: everything().reduce((max, item) => Math.max(max, item.id), 0) + 1,
   };
-  const error = writeLocalRecords([record, ...snapshot.records]);
+  const error = writeLocalRecords([record, ...everything()]);
   return error ? { error } : { record };
 }
 
@@ -272,7 +293,7 @@ export async function updateSavedRecords(
   const edits = requested.map(datedFromTicket);
   const replaced = (updated: SavedRecord[]) => {
     const byId = new Map(updated.map((record) => [record.id, record]));
-    return snapshot.records.map((record) => byId.get(record.id) ?? record);
+    return everything().map((record) => byId.get(record.id) ?? record);
   };
   if (snapshot.mode === 'remote') {
     const result = await apiJson<{ records: SavedRecord[] }>('/api/records', {
@@ -288,7 +309,7 @@ export async function updateSavedRecords(
   const editedAt = new Date().toISOString();
   const updated: SavedRecord[] = [];
   for (const edit of edits) {
-    const record = snapshot.records.find((item) => item.id === edit.id);
+    const record = everything().find((item) => item.id === edit.id);
     if (!record) {
       return { error: 'A ticket you changed no longer exists. Reload and try again.' };
     }
@@ -298,10 +319,11 @@ export async function updateSavedRecords(
       ...record,
       invoice_batch_id: edit.invoice_batch_id ?? recordBatch(record),
     };
-    updated.push({ ...applyRecordEdit(withBatch, edit, editedAt), id: edit.id });
+    // Nobody to name in the local preview.
+    updated.push({ ...applyRecordEdit(withBatch, edit, editedAt, null), id: edit.id });
   }
   const clash = findInvoiceClash(
-    snapshot.records,
+    everything(),
     updated.map((record) => ({
       id: record.id,
       invoiceNumber: record.invoice.invoice_number,
@@ -416,7 +438,7 @@ export async function deleteSavedRecord(
     if (!result.ok && result.status !== 404) return result.error;
     publish({
       ...snapshot,
-      records: snapshot.records.filter((item) => item.id !== record.id),
+      records: everything().filter((item) => item.id !== record.id),
     });
     // The gap the deletion may have left is closed now, from wherever the
     // deletion was made.
@@ -424,10 +446,13 @@ export async function deleteSavedRecord(
     return null;
   }
   if (snapshot.mode !== 'local') return 'Your session has ended. Sign in again.';
-  const error = writeLocalRecords(records.filter((item) => item.id !== record.id));
+  // Written from everything stored, not the list the page passed: a page
+  // sees only the books, and writing that back would drop the held pages.
+  const stored = everything();
+  const error = writeLocalRecords(stored.filter((item) => item.id !== record.id));
   if (error) return error;
   void reorderInvoicesByDate();
-  const shared = records.some(
+  const shared = [...records, ...stored].some(
     (other) => other.id !== record.id && other.source.sha256 === record.source.sha256,
   );
   if (!shared) {

@@ -1,3 +1,4 @@
+import type { DuplicateReview } from './duplicates.ts';
 import type { ObservedTicket, TicketRecovery } from './recovery/contract.ts';
 
 // Ticket fields mirror load_ticket_mvp/models.py so records stay compatible
@@ -200,4 +201,11 @@ export type SavedRecord = {
    * filed before automatic approval existed.
    */
   auto_approved_at?: string | null;
+  /**
+   * Set when this page's ticket number matched a ticket already on file. It
+   * is kept, photograph and all, on no invoice until a person compares the
+   * two and says whether it is the same ticket; the history says who said
+   * what, and when. Absent on every other ticket.
+   */
+  duplicate_review?: DuplicateReview;
 };

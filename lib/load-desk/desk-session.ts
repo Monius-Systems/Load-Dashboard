@@ -7,6 +7,7 @@
 // state. The session is held in memory only: a reload starts fresh.
 
 import type { QueueItem } from './types.ts';
+import type { UploadReceipt } from './upload-receipt.ts';
 
 /** A message under the upload or save button. */
 export type DeskStatus = { message: string; tone: 'info' | 'error' } | null;
@@ -34,6 +35,8 @@ export type DeskSession = {
   pending: File[];
   busy: boolean;
   uploadStatus: DeskStatus;
+  /** Where each page of the last upload went: its record and its invoice. */
+  uploadReceipt: UploadReceipt | null;
   extraction: DeskExtraction;
   saveStatus: DeskStatus;
   /**
@@ -67,6 +70,7 @@ const EMPTY: DeskSession = {
   pending: [],
   busy: false,
   uploadStatus: null,
+  uploadReceipt: null,
   extraction: null,
   saveStatus: null,
   scannerOpen: false,

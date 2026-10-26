@@ -25,6 +25,8 @@ import type {
 } from './recovery/contract.ts';
 import { customerLocationRates, type LocationRate } from './customer-rates.ts';
 import { datedFromTicket } from './invoice-dates.ts';
+import { parseDuplicateReview, stampedReview, type DuplicateReview } from './duplicates.ts';
+import { DUPLICATE_BATCH, pendingInvoiceNumber } from './records.ts';
 import { ticketDay } from './ticket-date.ts';
 
 // Validation for data the browser sends to the server. Everything is checked
@@ -293,6 +295,11 @@ export function parseNewRecord(value: unknown): Parsed<NewRecord> {
   }
   const recovery = recoveryOf(value.recovery);
   if ('error' in recovery) return recovery;
+  const review = duplicateReviewOf(value.duplicate_review);
+  if ('error' in review) return review;
+  if (review.value && review.value.resolution !== 'different' && value.invoice_batch_id !== DUPLICATE_BATCH) {
+    return { error: 'A suspected duplicate is held off every invoice until it is reviewed.' };
+  }
   return {
     // An invoice is dated by its ticket, wherever the record came from.
     value: datedFromTicket({
@@ -311,8 +318,16 @@ export function parseNewRecord(value: unknown): Parsed<NewRecord> {
       // Absent means nobody has checked it yet; see SavedRecord.reviewed_at.
       reviewed_at: (value.reviewed_at as string | null | undefined) ?? null,
       ...(typeof value.auto_approved_at === 'string' ? { auto_approved_at: value.auto_approved_at } : {}),
+      ...(review.value ? { duplicate_review: review.value } : {}),
     }),
   };
+}
+
+/** The duplicate review on a ticket being saved or changed; absent is fine. */
+function duplicateReviewOf(value: unknown): Parsed<DuplicateReview | undefined> {
+  if (value === undefined || value === null) return { value: undefined };
+  const review = parseDuplicateReview(value);
+  return review ? { value: review } : { error: 'The duplicate review details are not valid.' };
 }
 
 /** Changes to a saved ticket: the fields a person can edit after saving. */
@@ -352,6 +367,12 @@ export type RecordEdit = {
    * on every other edit.
    */
   auto_approved_at?: string;
+  /**
+   * A step in the review of a suspected duplicate: the review as it now
+   * stands. Only the steps beyond the stored ones are taken, and the side that
+   * stores them stamps who and when (see `stampedReview`).
+   */
+  duplicate_review?: DuplicateReview;
 };
 
 export const MAX_EDITS = 200;
@@ -396,6 +417,8 @@ export function parseRecordEdits(value: unknown): Parsed<RecordEdit[]> {
     }
     const recovery = recoveryOf(item.recovery);
     if ('error' in recovery) return recovery;
+    const review = duplicateReviewOf(item.duplicate_review);
+    if ('error' in review) return review;
     // An invoice is dated by its ticket here too: a change that came in over
     // the API cannot leave one carrying a day of its own.
     edits.push(
@@ -410,6 +433,7 @@ export function parseRecordEdits(value: unknown): Parsed<RecordEdit[]> {
         ...(batch !== undefined ? { invoice_batch_id: batch as string } : {}),
         ...(item.bookkeeping === true ? { bookkeeping: true as const } : {}),
         ...(typeof item.auto_approved_at === 'string' ? { auto_approved_at: item.auto_approved_at } : {}),
+        ...(review.value ? { duplicate_review: review.value } : {}),
       }),
     );
   }
@@ -425,8 +449,11 @@ export function applyRecordEdit<T extends Omit<SavedRecord, 'id'>>(
   record: T,
   edit: RecordEdit,
   editedAt: string,
+  /** Who is making the change, for the duplicate review's history. */
+  actor: string | null = null,
 ): T {
-  return {
+  const review = stampedReview(record.duplicate_review, edit.duplicate_review, actor, editedAt);
+  const applied: T = {
     ...record,
     ...(edit.invoice_batch_id ? { invoice_batch_id: edit.invoice_batch_id } : {}),
     ticket: edit.ticket,
@@ -444,7 +471,18 @@ export function applyRecordEdit<T extends Omit<SavedRecord, 'id'>>(
       ? {}
       : { edited_at: editedAt, reviewed_at: editedAt }),
     ...(edit.auto_approved_at ? { auto_approved_at: edit.auto_approved_at } : {}),
+    ...(review ? { duplicate_review: review } : {}),
   };
+  // A suspected duplicate stays off every invoice until it is resolved as a
+  // different ticket, whatever else the edit asked for: it is not to be
+  // billed while nobody has looked, nor once it is found to be a repeat.
+  return review && review.resolution !== 'different'
+    ? {
+        ...applied,
+        invoice_batch_id: DUPLICATE_BATCH,
+        invoice: { ...applied.invoice, invoice_number: pendingInvoiceNumber(DUPLICATE_BATCH) },
+      }
+    : applied;
 }
 
 const stringList = (value: unknown, maxItems: number, maxLength: number) =>

@@ -158,6 +158,114 @@
 .ld-status[data-tone='error'] {
   color: var(--ui-danger);
 }
+/* Where each page of the last upload went: one row per page, so the rows add
+   up to what was uploaded. */
+.ld-receipt {
+  /* Sized by its own box, not the window: the upload column it sits in is
+     narrow on a desk too, and six columns there broke file names apart. */
+  container: receipt / inline-size;
+  margin-top: var(--ui-space-3);
+  padding: var(--ui-space-3) var(--ui-space-4);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+}
+.ld-receipt-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ui-space-3);
+}
+.ld-receipt-head h3 {
+  font-size: var(--type-sm);
+  font-weight: var(--type-semibold);
+}
+.ld-receipt-head p {
+  margin-top: 2px;
+  font-size: var(--type-sm);
+  color: var(--ui-text-2);
+}
+.ld-receipt-table {
+  width: 100%;
+  margin-top: var(--ui-space-3);
+  border-collapse: collapse;
+  font-size: var(--type-sm);
+  font-variant-numeric: tabular-nums;
+}
+.ld-receipt-table th {
+  padding: 0 var(--ui-space-2) var(--ui-space-1);
+  text-align: left;
+  font-size: var(--type-xs);
+  font-weight: var(--type-semibold);
+  color: var(--ui-text-3);
+}
+.ld-receipt-table td {
+  padding: var(--ui-space-2);
+  border-top: 1px solid var(--ui-border);
+  vertical-align: top;
+}
+.ld-receipt-table th:first-child,
+.ld-receipt-table td:first-child {
+  padding-left: 0;
+  color: var(--ui-text-3);
+}
+.ld-receipt-table td small {
+  display: block;
+  font-size: var(--type-xs);
+  color: var(--ui-text-3);
+}
+.ld-receipt-file {
+  overflow-wrap: anywhere;
+}
+.ld-receipt-table td > button {
+  height: auto;
+  padding: 0;
+}
+/* A page that is not on a record of this upload is the one to look at. */
+.ld-receipt-table tr[data-outcome='duplicate'] td,
+.ld-receipt-table tr[data-outcome='undated'] td {
+  background: color-mix(in srgb, var(--ui-warning) 8%, transparent);
+}
+.ld-receipt-table tr[data-outcome='duplicate'] strong,
+.ld-receipt-table tr[data-outcome='undated'] strong {
+  color: var(--ui-warning);
+}
+.ld-receipt-table tr[data-outcome='failed'] strong,
+.ld-receipt-table tr[data-outcome='unsaved'] strong,
+.ld-receipt-table tr[data-outcome='gone'] strong {
+  color: var(--ui-danger);
+}
+@container receipt (max-width: 640px) {
+  .ld-receipt-table thead {
+    display: none;
+  }
+  .ld-receipt-table,
+  .ld-receipt-table tbody,
+  .ld-receipt-table tr,
+  .ld-receipt-table td {
+    display: block;
+  }
+  .ld-receipt-table tr {
+    padding: var(--ui-space-2) 0;
+    border-top: 1px solid var(--ui-border);
+  }
+  .ld-receipt-table td {
+    display: grid;
+    grid-template-columns: 5.5rem 1fr;
+    gap: var(--ui-space-2);
+    padding: 2px 0;
+    border-top: 0;
+  }
+  .ld-receipt-table td::before {
+    content: attr(data-label);
+    color: var(--ui-text-3);
+  }
+  /* Everything a cell holds sits beside its label, one under another. */
+  .ld-receipt-table td > * {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
 /* A saved ticket with unsaved changes. */
 .ld-queue-tab[data-changed='true'] {
   box-shadow: inset 0 0 0 1.5px var(--ui-warning);
@@ -2272,4 +2380,176 @@ details[open] > .ld-section-summary .ld-section-chevron {
 }
 .ld-exception .ld-field input[type='date'] {
   min-width: 11em;
+}
+
+/* Possible duplicates: each held page beside the record it matched, the two
+   pictures side by side and the figures that tell two loads apart under them. */
+.ld-duplicates {
+  border-left: 3px solid var(--ui-warning);
+}
+.ld-dup-count {
+  font-size: var(--type-sm);
+  font-weight: var(--type-semibold);
+  color: var(--ui-warning);
+}
+.ld-dup-intro,
+.ld-dup-hint {
+  font-size: var(--type-sm);
+  color: var(--ui-text-2);
+}
+.ld-dup-hint {
+  margin-top: var(--ui-space-2);
+  font-size: var(--type-xs);
+  color: var(--ui-text-3);
+}
+.ld-dup-list,
+.ld-dup-settled ul {
+  display: grid;
+  gap: var(--ui-space-4);
+  margin-top: var(--ui-space-3);
+}
+.ld-dup-case {
+  padding: var(--ui-space-3) var(--ui-space-4);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+}
+.ld-dup-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px var(--ui-space-3);
+}
+.ld-dup-head span {
+  font-size: var(--type-sm);
+  color: var(--ui-text-3);
+}
+.ld-dup-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ui-space-3);
+  margin-top: var(--ui-space-3);
+}
+.ld-dup-pair figure {
+  display: grid;
+  align-content: start;
+  gap: var(--ui-space-2);
+  min-width: 0;
+}
+.ld-dup-pair figcaption {
+  display: grid;
+  font-size: var(--type-sm);
+}
+.ld-dup-pair figcaption span {
+  font-size: var(--type-xs);
+  color: var(--ui-text-3);
+  overflow-wrap: anywhere;
+}
+.ld-dup-picture {
+  display: grid;
+  justify-items: start;
+  gap: var(--ui-space-1);
+}
+.ld-dup-picture > :first-child {
+  width: 100%;
+}
+.ld-dup-picture img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.ld-dup-picture .ld-preview-empty {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  padding: var(--ui-space-3);
+  font-size: var(--type-sm);
+  text-align: center;
+  color: var(--ui-text-3);
+}
+.ld-dup-fields {
+  width: 100%;
+  margin-top: var(--ui-space-3);
+  border-collapse: collapse;
+  font-size: var(--type-sm);
+  font-variant-numeric: tabular-nums;
+}
+.ld-dup-fields th,
+.ld-dup-fields td {
+  padding: var(--ui-space-1) var(--ui-space-2);
+  border-top: 1px solid var(--ui-border);
+  text-align: left;
+}
+.ld-dup-fields thead th {
+  border-top: 0;
+  font-size: var(--type-xs);
+  font-weight: var(--type-semibold);
+  color: var(--ui-text-3);
+}
+.ld-dup-fields tbody th {
+  font-weight: normal;
+  color: var(--ui-text-2);
+}
+.ld-dup-fields tr[data-differs] td {
+  background: color-mix(in srgb, var(--ui-warning) 12%, transparent);
+  font-weight: var(--type-semibold);
+}
+.ld-dup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-2);
+  margin-top: var(--ui-space-3);
+}
+.ld-dup-correct {
+  display: grid;
+  gap: var(--ui-space-1);
+  margin-top: var(--ui-space-3);
+  font-size: var(--type-sm);
+}
+.ld-dup-correct label {
+  font-weight: var(--type-semibold);
+}
+.ld-dup-correct small {
+  color: var(--ui-text-2);
+}
+.ld-dup-problem {
+  margin-top: var(--ui-space-2);
+  font-size: var(--type-sm);
+  color: var(--ui-danger);
+}
+.ld-dup-history,
+.ld-dup-settled {
+  margin-top: var(--ui-space-3);
+  font-size: var(--type-sm);
+}
+.ld-dup-history summary,
+.ld-dup-settled summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-1);
+  cursor: pointer;
+  color: var(--ui-text-2);
+}
+.ld-dup-history summary svg {
+  width: 14px;
+  height: 14px;
+}
+.ld-dup-history ol {
+  display: grid;
+  gap: var(--ui-space-2);
+  margin-top: var(--ui-space-2);
+  padding-left: var(--ui-space-3);
+  border-left: 2px solid var(--ui-border);
+}
+.ld-dup-history li {
+  display: grid;
+}
+.ld-dup-history small {
+  color: var(--ui-text-3);
+}
+@media (max-width: 460px) {
+  .ld-dup-pair {
+    grid-template-columns: 1fr;
+  }
 }

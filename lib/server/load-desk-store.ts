@@ -22,6 +22,7 @@ import {
 
 type NewProfile = NewCustomer | NewTruck | NewCompany | NewClient;
 import type { SavedRecord } from '@/lib/load-desk/types';
+import { stampedReview } from '@/lib/load-desk/duplicates';
 import { authSettings } from '@/lib/server/auth';
 
 // Supabase storage for a client workspace. Every function is given the
@@ -75,8 +76,14 @@ export async function listRecords(client: SupabaseClient, workspace: string): Pr
 export async function saveRecord(
   client: SupabaseClient,
   workspace: string,
-  record: NewRecord,
+  sent: NewRecord,
+  /** Who is saving, for a suspected duplicate's history. */
+  actor: string | null = null,
 ): Promise<SavedRecord> {
+  // A page held as a suspected duplicate starts its history here, stamped with
+  // who saved it rather than whatever the browser said.
+  const review = stampedReview(undefined, sent.duplicate_review, actor, new Date().toISOString());
+  const record: NewRecord = review ? { ...sent, duplicate_review: review } : sent;
   const invoiceKey = invoiceKeyOf(record.invoice.invoice_number);
   const claim = await client.from('load_desk_invoices').insert({
     workspace_id: workspace,
@@ -154,6 +161,8 @@ export async function updateRecords(
   client: SupabaseClient,
   workspace: string,
   edits: RecordEdit[],
+  /** Who is making the changes, for a suspected duplicate's history. */
+  actor: string | null = null,
 ): Promise<SavedRecord[]> {
   const { data, error } = await client
     .from('load_desk_records')
@@ -174,7 +183,7 @@ export async function updateRecords(
     if (!record) {
       throw new StoreError('A ticket you changed no longer exists. Reload and try again.', 404);
     }
-    updated.push({ ...applyRecordEdit(record, edit, editedAt), id: edit.id });
+    updated.push({ ...applyRecordEdit(record, edit, editedAt, actor), id: edit.id });
   }
   const result = await client.rpc('load_desk_update_records', {
     target_workspace: workspace,

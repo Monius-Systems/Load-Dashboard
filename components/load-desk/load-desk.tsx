@@ -196,6 +196,20 @@ import {
   subscribeDesk,
   type DeskSession,
 } from '@/lib/load-desk/desk-session';
+import {
+  awaitsDuplicateReview,
+  DUPLICATE_BATCH,
+  DUPLICATE_INVOICE_NUMBER,
+  suspectDuplicate,
+} from '@/lib/load-desk/duplicates';
+import DuplicateReviewPanel from '@/components/load-desk/duplicate-review';
+import {
+  receiptCounts,
+  receiptLines,
+  type ReceiptEntry,
+  type ReceiptOutcome,
+  type UploadReceipt,
+} from '@/lib/load-desk/upload-receipt';
 import type { Translator } from '@/lib/i18n/translate';
 import { useT } from '@/lib/i18n/use-t';
 
@@ -609,26 +623,37 @@ async function buildQueueItem(
  * If it cannot be filed — no signal in a yard, a session that has ended — the
  * item is handed back exactly as it was, so it stays in the queue to be saved
  * by hand rather than being lost.
+ *
+ * A page whose ticket number is already on file is kept too — photograph,
+ * fields and all — but held off every invoice as a suspected duplicate, and
+ * comes back as `suspected` rather than as an item for the queue: what it
+ * needs is the two pictures side by side (see DuplicateReviewPanel), not the
+ * review screen. It used to be turned away unsaved, its photograph with it,
+ * and a different ticket whose number was read wrong could never be found.
+ * Only the very same file, page for page, is not kept again — it is stored
+ * already, as `sameFile`.
  */
 async function fileInBatch(
   original: QueueItem,
   records: SavedRecord[],
-): Promise<{ item: QueueItem; error: string | null; opened: string | null }> {
+  held: SavedRecord[],
+): Promise<{
+  item: QueueItem;
+  error: string | null;
+  opened: string | null;
+  sameFile: SavedRecord | null;
+  suspected: { record: SavedRecord; matched: SavedRecord } | null;
+}> {
   const item = invoiceDated(original);
-  // The same sheet photographed again is not a new ticket. It is left in the
-  // queue unsaved, saying which record it already is, rather than filed on
-  // the invoice a second time.
-  const already = sameTicketOnFile(records, item.ticket);
-  if (already) {
-    return {
-      item: {
-        ...item,
-        note: `This ticket is already saved as record ${already.id} (ticket ${already.ticket.ticket_number}). A second photograph of it was not filed again.`,
-        note_problem: true,
-      },
-      error: `already saved as record ${already.id}`,
-      opened: null,
-    };
+  const none = { opened: null, sameFile: null, suspected: null };
+  const sameFile = sameFileOnFile([...records, ...held], item.source);
+  if (sameFile) return { ...none, item, error: null, sameFile };
+  const matched = sameTicketOnFile(records, item.ticket);
+  if (matched) {
+    const result = await saveSuspectedDuplicate(item, matched);
+    return 'error' in result
+      ? { ...none, item: suspectedNote(item, matched), error: result.error }
+      : { ...none, item, error: null, suspected: { record: result.record, matched } };
   }
   const batch = batchInvoiceFor(records, item.ticket.ticket_date);
   const result = await saveRecord(
@@ -651,7 +676,7 @@ async function fileInBatch(
     },
     item.original,
   );
-  if ('error' in result) return { item, error: result.error, opened: null };
+  if ('error' in result) return { ...none, item, error: result.error };
   const filed: QueueItem = {
     ...item,
     invoice: result.record.invoice,
@@ -665,11 +690,54 @@ async function fileInBatch(
   // later edits against. Without it nothing typed afterwards reads as a change
   // and the ticket sits on "Saved" with the button disabled, unsaveable.
   return {
+    ...none,
     item: { ...filed, baseline: editKey(filed) },
     error: null,
     opened: batch.opened ? batch.batch_id : null,
   };
 }
+
+/** The saved record that is this very file and page, or undefined. */
+const sameFileOnFile = (records: SavedRecord[], source: QueueItem['source']) =>
+  records.find(
+    (record) =>
+      record.source.sha256 === source.sha256 &&
+      (record.source.page ?? 1) === (source.page ?? 1),
+  );
+
+/**
+ * Saves a page as a suspected duplicate of `matched`: photograph stored,
+ * record saved, held in the duplicates batch on no invoice, its review open.
+ */
+function saveSuspectedDuplicate(item: QueueItem, matched: SavedRecord) {
+  return saveRecord(
+    {
+      saved_at: new Date().toISOString(),
+      ticket: item.ticket,
+      ...(item.recovery ? { recovery: item.recovery } : {}),
+      invoice: { ...item.invoice, invoice_number: DUPLICATE_INVOICE_NUMBER },
+      source: item.source,
+      ocr_text: item.ocr_text,
+      customer_profile_id: item.customer_profile_id,
+      truck_id: item.truck_id,
+      invoice_batch_id: DUPLICATE_BATCH,
+      reviewed_at: null,
+      duplicate_review: suspectDuplicate(
+        matched,
+        item.ticket.ticket_number ?? '',
+        new Date().toISOString(),
+      ),
+    },
+    item.original,
+  );
+}
+
+/** A suspected duplicate that could not be saved yet, as the queue shows it. */
+const suspectedNote = (item: QueueItem, matched: SavedRecord): QueueItem => ({
+  ...item,
+  note: `Possible duplicate of record ${matched.id} (ticket ${matched.ticket.ticket_number}). It could not be saved yet; saving it holds it for a side-by-side check, on no invoice.`,
+  note_problem: true,
+});
 
 /**
  * The review as the navigation reads it: every queued ticket, the invoice it is
@@ -900,6 +968,154 @@ function SourcePreview({ item }: { item: QueueItem }) {
   );
 }
 
+const RECEIPT_OUTCOMES: Record<ReceiptOutcome, string> = {
+  filed: 'Filed',
+  undated: 'Waiting for a date',
+  suspected: 'Possible duplicate',
+  duplicate: 'Same ticket',
+  same_file: 'File already saved',
+  unsaved: 'Not saved',
+  failed: 'Not read',
+  gone: 'Deleted since',
+};
+
+/**
+ * Where each page of the last upload went, a row each: the file, the ticket
+ * read off it, the record it is and the invoice that record is on — or why it
+ * is on none. Every page is a row, so the rows add up to what was uploaded
+ * and nothing is left to be found by counting an invoice.
+ */
+function UploadReceiptList({
+  receipt,
+  records,
+  onOpenRecord,
+  onDismiss,
+}: {
+  receipt: UploadReceipt;
+  records: SavedRecord[];
+  onOpenRecord: (id: number) => void;
+  onDismiss: () => void;
+}) {
+  const { t, plural } = useT();
+  const lines = receiptLines(receipt, records);
+  if (!lines.length) return null;
+  const counts = receiptCounts(lines);
+  const tally = [
+    counts.saved ? t('{tickets} filed', { tickets: plural(counts.saved, 'ticket') }) : '',
+    counts.suspected.length
+      ? t('{tickets} held as possible duplicates', { tickets: plural(counts.suspected.length, 'ticket') })
+      : '',
+    counts.duplicates.length
+      ? t('{tickets} confirmed duplicates', { tickets: plural(counts.duplicates.length, 'ticket') })
+      : '',
+    counts.sameFile.length
+      ? t('{files} already saved', { files: plural(counts.sameFile.length, 'file') })
+      : '',
+    counts.unsaved ? t('{tickets} not saved', { tickets: plural(counts.unsaved, 'ticket') }) : '',
+    counts.failed ? t('{files} not read', { files: plural(counts.failed, 'file') }) : '',
+    counts.gone ? t('{tickets} deleted since', { tickets: plural(counts.gone, 'ticket') }) : '',
+  ].filter(Boolean);
+  const invoiceOf = (line: (typeof lines)[number]) => {
+    if (line.invoice) {
+      return (
+        <>
+          {t('Invoice {number}', { number: line.invoice })}
+          {line.outcome === 'filed' ? (
+            <small>{line.newInvoice ? t('new') : t('already on file')}</small>
+          ) : null}
+        </>
+      );
+    }
+    if (line.outcome === 'undated') return t('None until the date is entered');
+    if (line.outcome === 'suspected') return t('None until it is compared');
+    if (line.outcome === 'failed') return t('Back with the files waiting');
+    if (line.outcome === 'unsaved') return t('Waiting in the queue to be saved');
+    if (line.outcome === 'gone') return '—';
+    return t('No invoice yet');
+  };
+  return (
+    <section className="ld-receipt" aria-labelledby="ld-receipt-title">
+      <div className="ld-receipt-head">
+        <div>
+          <h3 id="ld-receipt-title">{t('Where each ticket went')}</h3>
+          <p>
+            {[t('{pages} uploaded', { pages: plural(lines.length, 'page') }), ...tally].join(' · ')}
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          onClick={onDismiss}
+          aria-label={t('Dismiss')}
+        >
+          <X />
+        </Button>
+      </div>
+      <table className="ld-receipt-table">
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">{t('File')}</th>
+            <th scope="col">{t('Ticket')}</th>
+            <th scope="col">{t('Result')}</th>
+            <th scope="col">{t('Record')}</th>
+            <th scope="col">{t('Invoice')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map((line, index) => (
+            <tr key={`${index}-${line.file}`} data-outcome={line.outcome}>
+              <td data-label="#">{index + 1}</td>
+              <td data-label={t('File')} className="ld-receipt-file">
+                {line.file}
+              </td>
+              <td data-label={t('Ticket')}>{line.ticketNumber ?? t('unnumbered')}</td>
+              <td data-label={t('Result')}>
+                <strong>{t(RECEIPT_OUTCOMES[line.outcome])}</strong>
+                {line.outcome === 'suspected' ? (
+                  <small>
+                    {t('Same ticket number as record {id}. Kept and held off every invoice until you compare them.', {
+                      id: line.matchedId!,
+                    })}
+                  </small>
+                ) : line.outcome === 'duplicate' ? (
+                  <small>
+                    {t('Checked: the same ticket as record {id}. Kept, never billed.', {
+                      id: line.matchedId!,
+                    })}
+                  </small>
+                ) : line.outcome === 'same_file' ? (
+                  <small>{t('This very file is saved already.')}</small>
+                ) : line.detail ? (
+                  <small>{line.detail}</small>
+                ) : null}
+              </td>
+              <td data-label={t('Record')}>
+                {line.recordId !== null && line.outcome !== 'gone' ? (
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="xs"
+                    onClick={() => onOpenRecord(line.recordId!)}
+                  >
+                    {t('Record {id}', { id: line.recordId })}
+                  </Button>
+                ) : line.recordId !== null ? (
+                  t('Record {id}', { id: line.recordId })
+                ) : (
+                  '—'
+                )}
+              </td>
+              <td data-label={t('Invoice')}>{invoiceOf(line)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
 export default function LoadDesk() {
   const { t, plural, date } = useT();
   const store = useSyncExternalStore(
@@ -908,6 +1124,9 @@ export default function LoadDesk() {
     getServerRecordsSnapshot,
   );
   const records = store.records;
+  // Suspected duplicates, held off every invoice: the ones still waiting for
+  // the side-by-side check, and those already settled as the same ticket.
+  const held = store.held;
   const profileStore = useSyncExternalStore(
     subscribeProfiles,
     getProfilesSnapshot,
@@ -926,6 +1145,7 @@ export default function LoadDesk() {
     pending,
     busy,
     uploadStatus,
+    uploadReceipt,
     extraction,
     saveStatus,
     scannerOpen,
@@ -978,16 +1198,22 @@ export default function LoadDesk() {
     void loadLearnedMisreads();
   }, []);
 
-  // Said to the session, so the top bar on every other page can say it.
+  // Said to the session, so the top bar on every other page can say it. A
+  // possible duplicate waiting to be compared is a ticket that needs a look.
+  const duplicatesWaiting = held.filter(awaitsDuplicateReview).length;
   useEffect(() => {
-    setDeskField('needsInput', { groups: groupsAsked.length, tickets: ticketsAsked.length });
-  }, [groupsAsked.length, ticketsAsked.length]);
+    setDeskField('needsInput', {
+      groups: groupsAsked.length,
+      tickets: ticketsAsked.length + duplicatesWaiting,
+    });
+  }, [groupsAsked.length, ticketsAsked.length, duplicatesWaiting]);
 
   /** What a person has typed against each open question, by group. */
   const [groupAnswers, setGroupAnswers] = useState<Record<string, Record<string, string>>>({});
   const [groupBusy, setGroupBusy] = useState<string | null>(null);
   const [groupError, setGroupError] = useState<Record<string, string>>({});
   const exceptionsPanel = useRef<HTMLElement>(null);
+  const duplicatesPanel = useRef<HTMLElement>(null);
   const answerFor = (group: ExceptionGroup, field: string) =>
     groupAnswers[group.key]?.[field] ??
     (field === 'customer_profile'
@@ -1700,9 +1926,17 @@ export default function LoadDesk() {
     const start = queue.length;
     const added: QueueItem[] = [];
     const failures: string[] = [];
+    // Every page of the upload, in order, and what became of it — filed,
+    // already on file, or not filed and why — so no page goes unaccounted for.
+    const receipt: ReceiptEntry[] = [];
     // The batches this upload opened, whose numbers are this upload's to hand
     // out once every page has been read.
     const openedBatches = new Set<string>();
+    const keepReceipt = (): UploadReceipt => {
+      const kept = { at: new Date().toISOString(), entries: receipt, opened: [...openedBatches] };
+      setDeskField('uploadReceipt', kept);
+      return kept;
+    };
     /**
      * This upload, held open until nothing in it is still being read. Every page
      * reports itself into it, and no invoice number is decided until they are all
@@ -1714,6 +1948,7 @@ export default function LoadDesk() {
       noteTicket(session, `file-${index}`, 'queued');
     }
     setUploadStatus(null);
+    setDeskField('uploadReceipt', null);
     for (const [index, entry] of entries.entries()) {
       const show = (fraction: number, label: string) =>
         setExtraction({
@@ -1741,7 +1976,15 @@ export default function LoadDesk() {
           }
         }
         if (kind === 'sample') {
-          added.push(await buildQueueItem(entry, kind, profileContext));
+          const sample = await buildQueueItem(entry, kind, profileContext);
+          receipt.push({
+            file: sample.source.file_name,
+            ticketNumber: sample.ticket.ticket_number,
+            kind: 'unsaved',
+            recordId: null,
+            detail: null,
+          });
+          added.push(sample);
           noteTicket(session, `file-${index}`, 'extracted');
         } else {
           const pages = await extractPages(
@@ -1755,10 +1998,39 @@ export default function LoadDesk() {
               total: pages.length,
             });
             // Kept before anyone is asked to look at it.
-            const filed = await fileInBatch(built, getRecordsSnapshot().records);
+            const stored = getRecordsSnapshot();
+            const filed = await fileInBatch(built, stored.records, stored.held);
+            const line = {
+              file: built.source.file_name,
+              ticketNumber: built.ticket.ticket_number,
+              matchedId: null,
+            };
+            if (filed.sameFile) {
+              // This very file is stored already, as that record. Nothing new
+              // to keep, nothing to queue, and the receipt says which it is.
+              receipt.push({ ...line, kind: 'same_file', recordId: filed.sameFile.id, detail: null });
+              continue;
+            }
+            if (filed.suspected) {
+              // Kept and held for the side-by-side check, on no invoice. It
+              // waits in the duplicates panel, not in the review queue.
+              receipt.push({
+                ...line,
+                kind: 'held',
+                recordId: filed.suspected.record.id,
+                matchedId: filed.suspected.matched.id,
+                detail: null,
+              });
+              continue;
+            }
             if (filed.item.saved_record_id !== null) filing.current.add(filed.item.saved_record_id);
             if (filed.error) failures.push(`${entry.name}: ${t(filed.error)}`);
             if (filed.opened) openedBatches.add(filed.opened);
+            receipt.push(
+              filed.item.saved_record_id !== null
+                ? { ...line, kind: 'saved', recordId: filed.item.saved_record_id, detail: null }
+                : { ...line, kind: 'unsaved', recordId: null, detail: filed.error && t(filed.error) },
+            );
             added.push(filed.item);
           }
           // Read and filed. Not numbered: that waits for its siblings.
@@ -1769,6 +2041,13 @@ export default function LoadDesk() {
         }
       } catch (error) {
         failures.push(`${entry.name}: ${t(errorMessage(error))}`);
+        receipt.push({
+          file: entry.name,
+          ticketNumber: null,
+          kind: 'failed',
+          recordId: null,
+          detail: t(errorMessage(error)),
+        });
         // The photograph is not lost. A page the reader could not be reached
         // for goes back to the list waiting to be processed, so one tap sends
         // it again; the picture is the thing a driver cannot take twice once
@@ -1790,6 +2069,29 @@ export default function LoadDesk() {
     }
     setExtraction(null);
     setBusy(false);
+    // Said beside the count, not left inside it: a page held as a possible
+    // duplicate is not one of the tickets this upload put on an invoice, and
+    // the record it matched says what to compare it with.
+    const heldNow = receipt.filter((entry) => entry.kind === 'held');
+    const sameFiles = receipt.filter((entry) => entry.kind === 'same_file');
+    const onFileText = [
+      heldNow.length
+        ? t('{tickets} held as possible duplicates ({records}), on no invoice until you compare them', {
+            tickets: plural(heldNow.length, 'ticket'),
+            records: heldNow
+              .map((entry) => t('matches record {id}', { id: entry.matchedId! }))
+              .join(', '),
+          })
+        : '',
+      sameFiles.length
+        ? t('{files} already saved ({records})', {
+            files: plural(sameFiles.length, 'file'),
+            records: sameFiles.map((entry) => t('record {id}', { id: entry.recordId! })).join(', '),
+          })
+        : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
     if (target) {
       const number = target.invoice.invoice_number.trim();
       toast.add({
@@ -1805,6 +2107,7 @@ export default function LoadDesk() {
           : t('No tickets were added'),
         description: [
           added.length ? t('Review and save each new ticket.') : '',
+          onFileText,
           ...failures,
         ]
           .filter(Boolean)
@@ -1813,9 +2116,12 @@ export default function LoadDesk() {
       });
     }
     if (!added.length) {
+      keepReceipt();
       if (!target) {
         setUploadStatus({
-          message: [t('No tickets were added.'), ...failures].join(' · '),
+          // A page held for comparison was kept, not refused, so "nothing was
+          // added" is said only when nothing at all was.
+          message: [onFileText || t('No tickets were added.'), ...failures].filter(Boolean).join(' · '),
           tone: failures.length ? 'error' : 'info',
         });
       }
@@ -2021,12 +2327,28 @@ export default function LoadDesk() {
           type: 'error',
         });
       }
-      const invoices =
-        new Set(
-          grouped
-            .filter((item) => !isUndatedBatch(item.batch_id))
-            .map((item) => item.invoice.invoice_number.trim().toLowerCase()),
-        ).size;
+      // Counted off the receipt, against the records as they now stand: the
+      // tickets this upload filed, the invoices it opened and the ones on file
+      // it added to, told apart. Adding a day's last tickets to an invoice
+      // already on file is not creating one, and a ticket already on file is
+      // not one of the tickets filed.
+      const counted = receiptCounts(receiptLines(keepReceipt(), getRecordsSnapshot().records));
+      const tally = [
+        counted.saved ? t('✓ {tickets} filed', { tickets: plural(counted.saved, 'ticket') }) : '',
+        counted.created.length
+          ? t('✓ {invoices} created ({numbers})', {
+              invoices: plural(counted.created.length, 'invoice'),
+              numbers: counted.created.join(', '),
+            })
+          : '',
+        counted.joined.length
+          ? t('added to {invoices} on file ({numbers})', {
+              invoices: plural(counted.joined.length, 'invoice'),
+              numbers: counted.joined.join(', '),
+            })
+          : '',
+        onFileText,
+      ];
       // What this scan came to, by what the evidence settled: tickets the
       // app approved on its own, questions about a job to ask once, and
       // tickets with something of their own to look at. Worked out over the
@@ -2046,8 +2368,7 @@ export default function LoadDesk() {
       const askedTickets = outcomes.filter((group) => group.type === 'INDIVIDUAL_CRITICAL_FIELD').length;
       const settled = grouped.length - outcomes.reduce((sum, group) => sum + group.ticketIds.length, 0);
       const summary = [
-        t('✓ {tickets} processed', { tickets: plural(added.length, 'ticket') }),
-        invoices ? t('✓ {invoices} created', { invoices: plural(invoices, 'invoice') }) : '',
+        ...tally,
         settled < added.length
           ? [
               askedGroups ? t('{groups} need your input', { groups: plural(askedGroups, 'group') }) : '',
@@ -2085,8 +2406,7 @@ export default function LoadDesk() {
       // line stops asking for it.
       void reasons;
       const short = [
-        t('✓ {tickets} processed', { tickets: plural(added.length, 'ticket') }),
-        invoices ? t('✓ {invoices} created', { invoices: plural(invoices, 'invoice') }) : '',
+        ...tally,
         ...failures,
       ]
         .filter(Boolean)
@@ -2453,18 +2773,39 @@ export default function LoadDesk() {
       });
       return;
     }
-    const duplicate =
-      records.find(
-        (record) =>
-          record.source.sha256 === active.source.sha256 &&
-          (record.source.page ?? 1) === (active.source.page ?? 1),
-      ) ?? sameTicketOnFile(records, active.ticket);
-    if (duplicate) {
-      updateActive((item) => ({ ...item, saved_record_id: duplicate.id }));
+    // This very file is stored already: there is nothing more of it to keep.
+    const sameFile = sameFileOnFile([...records, ...held], active.source);
+    if (sameFile) {
+      updateActive((item) => ({ ...item, saved_record_id: sameFile.id }));
       setSaveStatus({
         message: t(
           'This file is already saved as record {id} (ticket {ticket}). Nothing was added.',
-          { id: duplicate.id, ticket: duplicate.ticket.ticket_number ?? t('unnumbered') },
+          { id: sameFile.id, ticket: sameFile.ticket.ticket_number ?? t('unnumbered') },
+        ),
+        tone: 'info',
+      });
+      return;
+    }
+    // A ticket number already on file: kept and held for the side-by-side
+    // check, on no invoice. Refusing it here used to leave it in the tab,
+    // pointed at the other record, to be lost on the next reload.
+    const matched = sameTicketOnFile(records, active.ticket);
+    if (matched) {
+      setBusy(true);
+      const result = await saveSuspectedDuplicate(active, matched);
+      setBusy(false);
+      if ('error' in result) {
+        setSaveStatus({ message: result.error, tone: 'error' });
+        return;
+      }
+      const at = activeIndex;
+      setQueue((current) => current.filter((_, index) => index !== at));
+      setActiveIndex(-1);
+      setSaveStatus(null);
+      setUploadStatus({
+        message: t(
+          'Held as a possible duplicate of record {id}, on no invoice. Compare the two under Possible duplicates.',
+          { id: matched.id },
         ),
         tone: 'info',
       });
@@ -4266,6 +4607,18 @@ export default function LoadDesk() {
                 ? ` · ${t('Please review')}: ${liveReview}`
                 : ''}
             </p>
+            {uploadReceipt && !busy ? (
+              <UploadReceiptList
+                receipt={uploadReceipt}
+                records={[...records, ...held]}
+                onOpenRecord={(id) =>
+                  held.some((record) => record.id === id)
+                    ? duplicatesPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                    : setDeskField('editRequest', id)
+                }
+                onDismiss={() => setDeskField('uploadReceipt', null)}
+              />
+            ) : null}
           </section>
 
           {/* The questions the scans left, one per job. A ticket the evidence
@@ -4276,6 +4629,9 @@ export default function LoadDesk() {
               batches. One column, so the batches sit under the questions on a
               desk rather than being pushed under the upload by them. */}
           <div className="ld-side">
+          {/* Pages whose ticket number is already on file, kept and held off
+              every invoice until somebody has compared the two pictures. */}
+          <DuplicateReviewPanel ref={duplicatesPanel} held={held} records={records} />
           {exceptions.length ? (
             <section className="ld-panel ld-exceptions" aria-labelledby="ld-input-title" ref={exceptionsPanel}>
               <div className="ld-panel-head">
