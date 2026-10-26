@@ -524,22 +524,65 @@ export function joinsInvoiceFor(
  * billed twice. A plant's ticket number is the ticket, so a number already
  * on file from the same plant is the same ticket. Six digits at least, so a
  * short number two suppliers might both print is not mistaken for a repeat;
- * the plant compared where both name one.
+ * the plant compared where both name one (see `samePlant`).
+ *
+ * What this finds is only ever held for a person to compare (duplicates.ts),
+ * never thrown away, so it leans towards asking: a repeat it misses is billed
+ * twice, while a ticket it holds by mistake costs one look at two pictures.
  */
 export function sameTicketOnFile(
   records: SavedRecord[],
-  ticket: Pick<Ticket, 'ticket_number' | 'plant_name'>,
+  ticket: Pick<Ticket, 'ticket_number' | 'plant_name'> & Partial<Pick<Ticket, 'plant_code'>>,
 ): SavedRecord | null {
   const number = (ticket.ticket_number ?? '').replace(/\D/g, '');
   if (number.length < 6) return null;
-  const plant = normalizeName(ticket.plant_name ?? '');
   return (
-    records.find((record) => {
-      if ((record.ticket.ticket_number ?? '').replace(/\D/g, '') !== number) return false;
-      const other = normalizeName(record.ticket.plant_name ?? '');
-      return !plant || !other || plant === other;
-    }) ?? null
+    records.find(
+      (record) =>
+        (record.ticket.ticket_number ?? '').replace(/\D/g, '') === number &&
+        samePlant(ticket, record.ticket),
+    ) ?? null
   );
+}
+
+/** Words every supplier's name might carry, which say nothing about which one. */
+const GENERIC_PLANT_WORDS = new Set([
+  'AGGREGATE', 'AGGREGATES', 'MATERIAL', 'MATERIALS', 'CONCRETE', 'READY', 'MIX',
+  'ASPHALT', 'STONE', 'SAND', 'GRAVEL', 'QUARRY', 'QUARRIES', 'ROCK', 'SUPPLY',
+  'COMPANY', 'CO', 'INC', 'LLC', 'LTD', 'CORP', 'CORPORATION', 'THE', 'AND', 'OF',
+  'PLANT', 'YARD',
+]);
+
+const plantWords = (name: string | null | undefined) =>
+  new Set(
+    normalizeName(name ?? '')
+      .split(' ')
+      .filter((word) => word.length > 1 && !GENERIC_PLANT_WORDS.has(word)),
+  );
+
+/**
+ * Whether two tickets can be from the same plant, as far as their print says.
+ *
+ * The plant's name is read off a picture like everything else, and the same
+ * sheet has come back as "NORTHFIELD Aggregates" from one photograph and
+ * "NORTHFIELD" from the next — and the second copy, taken for another plant's
+ * ticket, was filed on the invoice beside the first. So two names are the
+ * same plant when they share a word that names it, or when the plant codes
+ * printed on both agree; they are different plants only when both are read
+ * and nothing in them agrees. A name with nothing distinctive in it, or no
+ * name at all, is no disagreement.
+ */
+export function samePlant(
+  a: Pick<Ticket, 'plant_name'> & Partial<Pick<Ticket, 'plant_code'>>,
+  b: Pick<Ticket, 'plant_name'> & Partial<Pick<Ticket, 'plant_code'>>,
+): boolean {
+  const codeA = normalizeName(a.plant_code ?? '');
+  const codeB = normalizeName(b.plant_code ?? '');
+  if (codeA && codeA === codeB) return true;
+  const wordsA = plantWords(a.plant_name);
+  const wordsB = plantWords(b.plant_name);
+  if (!wordsA.size || !wordsB.size) return true;
+  return [...wordsA].some((word) => wordsB.has(word));
 }
 
 /** Photographed and read, but nobody has checked it against the picture yet. */

@@ -128,7 +128,7 @@ export function correctionProblem(
   }
   const taken = sameTicketOnFile(
     billable.filter((other) => other.id !== record.id),
-    { ticket_number: typed, plant_name: record.ticket.plant_name },
+    { ticket_number: typed, plant_name: record.ticket.plant_name, plant_code: record.ticket.plant_code },
   );
   return taken ? `Ticket ${typed} is already on file as record ${taken.id}.` : null;
 }

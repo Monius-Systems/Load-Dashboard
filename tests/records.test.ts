@@ -248,3 +248,30 @@ void test('a second photograph of a ticket already on file is the same ticket', 
   assert.equal(sameTicketOnFile([onFile], { ticket_number: '1725331395', plant_name: 'Heidelberg Materials' }), null);
   assert.equal(sameTicketOnFile([onFile], { ticket_number: '12345', plant_name: 'Heidelberg Materials' }), null, 'too short to be sure of');
 });
+
+void test('the same plant read two ways is the same plant', () => {
+  const onFile = record('2027', {
+    ticket_number: '4836297',
+    plant_name: 'NORTHFIELD Aggregates',
+    plant_code: 'N12',
+  });
+  // Seen on staging: the second photograph read the plant as "NORTHFIELD",
+  // and the repeat was filed beside the first, billed twice.
+  assert.equal(sameTicketOnFile([onFile], { ticket_number: '4836297', plant_name: 'NORTHFIELD' })?.id, onFile.id);
+  assert.equal(sameTicketOnFile([onFile], { ticket_number: '4836297', plant_name: 'Northfield Aggregates Inc.' })?.id, onFile.id);
+  assert.equal(
+    sameTicketOnFile([onFile], { ticket_number: '4836297', plant_name: 'NRTHFLD YARD', plant_code: 'N12' })?.id,
+    onFile.id,
+    'the plant code printed on both settles it when the name was read badly',
+  );
+  assert.equal(
+    sameTicketOnFile([onFile], { ticket_number: '4836297', plant_name: 'Aggregates' })?.id,
+    onFile.id,
+    'a name with nothing distinctive in it is no disagreement',
+  );
+  assert.equal(
+    sameTicketOnFile([onFile], { ticket_number: '4836297', plant_name: 'Ozinga Ready Mix', plant_code: 'K3' }),
+    null,
+    'another plant, by name and by code, is another ticket',
+  );
+});
