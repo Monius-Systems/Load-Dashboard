@@ -4,6 +4,7 @@ import { sameTicketOnFile, UNDATED_BATCH, pendingInvoiceNumber } from '../lib/lo
 import {
   receiptCounts,
   receiptLines,
+  receiptTally,
   type ReceiptEntry,
   type UploadReceipt,
 } from '../lib/load-desk/upload-receipt.ts';
@@ -184,4 +185,26 @@ void test('pages on no invoice say so: undated, unread, unsaved and deleted sinc
   assert.equal(counts.undated, 1);
   assert.deepEqual(counts.created, []);
   assert.equal(counts.saved + counts.failed + counts.unsaved + counts.gone, 4);
+});
+
+void test('the status line follows a held page as it is compared, rather than saying what it was', async () => {
+  const { makeTranslator } = await import('../lib/i18n/translate.ts');
+  const say = (all: SavedRecord[]) => receiptTally(receiptLines(receipt, all), makeTranslator('en')).join(' · ');
+  assert.equal(
+    say([...records, held576]),
+    '✓ 12 tickets filed · added to 1 invoice on file (2065) · 1 ticket held as possible duplicates (matches record 563), on no invoice until you compare them',
+  );
+  const same = { ...held576, duplicate_review: resolveSame(held576.duplicate_review!, '2026-10-26T02:00:00.000Z') };
+  assert.equal(
+    say([...records, same]),
+    '✓ 12 tickets filed · added to 1 invoice on file (2065) · 1 ticket checked as the same ticket as record 563, not billed',
+  );
+  const filedNow: SavedRecord = {
+    ...held576,
+    ticket: { ...held576.ticket, ticket_number: '1725474385' },
+    invoice: { ...held576.invoice, invoice_number: '2065' },
+    invoice_batch_id: BATCH,
+    duplicate_review: { ...held576.duplicate_review!, resolution: 'different', corrected_number: '1725474385' },
+  };
+  assert.equal(say([...records, filedNow]), '✓ 13 tickets filed · added to 1 invoice on file (2065)');
 });

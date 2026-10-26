@@ -206,6 +206,7 @@ import DuplicateReviewPanel from '@/components/load-desk/duplicate-review';
 import {
   receiptCounts,
   receiptLines,
+  receiptTally,
   type ReceiptEntry,
   type ReceiptOutcome,
   type UploadReceipt,
@@ -1153,6 +1154,17 @@ export default function LoadDesk() {
     truckChoice,
     addingTo,
   } = desk;
+  // The line under the upload button. After an upload it is the receipt's
+  // tally as things stand now, then whatever was true only of that moment.
+  const receiptNow = useMemo(
+    () => (uploadReceipt ? receiptLines(uploadReceipt, [...records, ...held]) : null),
+    [uploadReceipt, records, held],
+  );
+  const uploadLine =
+    uploadStatus?.live && receiptNow
+      ? [...receiptTally(receiptNow, { t, plural }), uploadStatus.message].filter(Boolean).join(' · ') ||
+        t('No tickets were added.')
+      : uploadStatus?.message;
 
   /**
    * What the workspace knows, and what of the filed tickets it does not.
@@ -2118,12 +2130,10 @@ export default function LoadDesk() {
     if (!added.length) {
       keepReceipt();
       if (!target) {
-        setUploadStatus({
-          // A page held for comparison was kept, not refused, so "nothing was
-          // added" is said only when nothing at all was.
-          message: [onFileText || t('No tickets were added.'), ...failures].filter(Boolean).join(' · '),
-          tone: failures.length ? 'error' : 'info',
-        });
+        // What the upload came to is said from the receipt as the line is
+        // shown; a page held for comparison was kept, not refused, so "nothing
+        // was added" is said only when the receipt has nothing either.
+        setUploadStatus({ message: failures.join(' · '), tone: failures.length ? 'error' : 'info', live: true });
       }
       return;
     }
@@ -2327,28 +2337,12 @@ export default function LoadDesk() {
           type: 'error',
         });
       }
-      // Counted off the receipt, against the records as they now stand: the
-      // tickets this upload filed, the invoices it opened and the ones on file
-      // it added to, told apart. Adding a day's last tickets to an invoice
-      // already on file is not creating one, and a ticket already on file is
-      // not one of the tickets filed.
-      const counted = receiptCounts(receiptLines(keepReceipt(), getRecordsSnapshot().records));
-      const tally = [
-        counted.saved ? t('✓ {tickets} filed', { tickets: plural(counted.saved, 'ticket') }) : '',
-        counted.created.length
-          ? t('✓ {invoices} created ({numbers})', {
-              invoices: plural(counted.created.length, 'invoice'),
-              numbers: counted.created.join(', '),
-            })
-          : '',
-        counted.joined.length
-          ? t('added to {invoices} on file ({numbers})', {
-              invoices: plural(counted.joined.length, 'invoice'),
-              numbers: counted.joined.join(', '),
-            })
-          : '',
-        onFileText,
-      ];
+      // What this upload filed, the invoices it opened or joined and the
+      // pages held for comparison are not counted here: the line says them
+      // from the receipt each time it is shown (see `receiptTally`), so it
+      // follows a held page onto its invoice rather than going on saying it
+      // is held after somebody has compared it.
+      keepReceipt();
       // What this scan came to, by what the evidence settled: tickets the
       // app approved on its own, questions about a job to ask once, and
       // tickets with something of their own to look at. Worked out over the
@@ -2368,7 +2362,6 @@ export default function LoadDesk() {
       const askedTickets = outcomes.filter((group) => group.type === 'INDIVIDUAL_CRITICAL_FIELD').length;
       const settled = grouped.length - outcomes.reduce((sum, group) => sum + group.ticketIds.length, 0);
       const summary = [
-        ...tally,
         settled < added.length
           ? [
               askedGroups ? t('{groups} need your input', { groups: plural(askedGroups, 'group') }) : '',
@@ -2406,7 +2399,6 @@ export default function LoadDesk() {
       // line stops asking for it.
       void reasons;
       const short = [
-        ...tally,
         ...failures,
       ]
         .filter(Boolean)
@@ -2432,6 +2424,7 @@ export default function LoadDesk() {
       setUploadStatus({
         message: isPhone ? short : long,
         tone: failures.length || undated ? 'error' : 'info',
+        live: true,
       });
     }
     setQueue((current) => [...current, ...grouped]);
@@ -4602,8 +4595,8 @@ export default function LoadDesk() {
               data-tone={uploadStatus?.tone}
               aria-live="polite"
             >
-              {uploadStatus?.message}
-              {isPhone && liveReview && uploadStatus?.message.startsWith('✓')
+              {uploadLine}
+              {isPhone && liveReview && uploadLine?.startsWith('✓')
                 ? ` · ${t('Please review')}: ${liveReview}`
                 : ''}
             </p>
@@ -4616,7 +4609,11 @@ export default function LoadDesk() {
                     ? duplicatesPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
                     : setDeskField('editRequest', id)
                 }
-                onDismiss={() => setDeskField('uploadReceipt', null)}
+                onDismiss={() => {
+                  setDeskField('uploadReceipt', null);
+                  // The line was the receipt's own; it goes with it.
+                  if (uploadStatus?.live) setUploadStatus(null);
+                }}
               />
             ) : null}
           </section>

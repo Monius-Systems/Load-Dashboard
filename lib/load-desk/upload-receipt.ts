@@ -17,6 +17,7 @@
 
 import { isPendingInvoiceNumber, isUndatedBatch, recordBatch } from './records.ts';
 import type { SavedRecord } from './types.ts';
+import type { Translator } from '../i18n/translate.ts';
 
 /** What the upload did with one page, decided as it happened. */
 export type ReceiptEntry = {
@@ -187,4 +188,54 @@ export function receiptCounts(lines: ReceiptLine[]): ReceiptCounts {
   // An invoice opened by this upload is not also one it joined.
   counts.joined = [...joined].filter((number) => !created.has(number));
   return counts;
+}
+
+/**
+ * What the last upload came to, as the line under the upload button says it:
+ * worked out from the receipt against the records as they stand whenever it
+ * is shown, not frozen as the upload finished. A page held as a possible
+ * duplicate reads as held until somebody compares it, and as filed — on the
+ * invoice it went to — or as the same ticket once they have.
+ */
+export function receiptTally(
+  lines: ReceiptLine[],
+  { t, plural }: Pick<Translator, 't' | 'plural'>,
+): string[] {
+  const counts = receiptCounts(lines);
+  const records = (ids: number[]) => ids.map((id) => t('record {id}', { id })).join(', ');
+  const suspected = lines.filter((line) => line.outcome === 'suspected');
+  return [
+    counts.saved ? t('✓ {tickets} filed', { tickets: plural(counts.saved, 'ticket') }) : '',
+    counts.created.length
+      ? t('✓ {invoices} created ({numbers})', {
+          invoices: plural(counts.created.length, 'invoice'),
+          numbers: counts.created.join(', '),
+        })
+      : '',
+    counts.joined.length
+      ? t('added to {invoices} on file ({numbers})', {
+          invoices: plural(counts.joined.length, 'invoice'),
+          numbers: counts.joined.join(', '),
+        })
+      : '',
+    suspected.length
+      ? t('{tickets} held as possible duplicates ({records}), on no invoice until you compare them', {
+          tickets: plural(suspected.length, 'ticket'),
+          records: suspected.map((line) => t('matches record {id}', { id: line.matchedId! })).join(', '),
+        })
+      : '',
+    counts.duplicates.length
+      ? t('{tickets} checked as the same ticket as {records}, not billed', {
+          tickets: plural(counts.duplicates.length, 'ticket'),
+          records: records(counts.duplicates),
+        })
+      : '',
+    counts.sameFile.length
+      ? t('{files} already saved ({records})', {
+          files: plural(counts.sameFile.length, 'file'),
+          records: records(counts.sameFile),
+        })
+      : '',
+    counts.gone ? t('{tickets} deleted since', { tickets: plural(counts.gone, 'ticket') }) : '',
+  ].filter(Boolean);
 }

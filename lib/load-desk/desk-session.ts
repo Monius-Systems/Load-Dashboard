@@ -9,8 +9,13 @@
 import type { QueueItem } from './types.ts';
 import type { UploadReceipt } from './upload-receipt.ts';
 
-/** A message under the upload or save button. */
-export type DeskStatus = { message: string; tone: 'info' | 'error' } | null;
+/**
+ * A message under the upload or save button. `live` marks the line an upload
+ * leaves: what it came to is worked out from its receipt each time the line
+ * is shown (see `receiptTally`), and `message` holds only what was true at
+ * the moment of the upload — a file that could not be read, a photo to retake.
+ */
+export type DeskStatus = { message: string; tone: 'info' | 'error'; live?: true } | null;
 
 /** Extraction in progress: file `index` (0-based) of `total`, whole batch `percent`. */
 export type DeskExtraction = {
