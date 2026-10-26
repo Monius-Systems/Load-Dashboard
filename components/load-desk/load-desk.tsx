@@ -203,6 +203,7 @@ import {
   suspectDuplicate,
 } from '@/lib/load-desk/duplicates';
 import DuplicateReviewPanel from '@/components/load-desk/duplicate-review';
+import { resemblingTicketOnFile, type Resemblance } from '@/lib/load-desk/resemblance';
 import {
   receiptCounts,
   receiptLines,
@@ -649,9 +650,13 @@ async function fileInBatch(
   const none = { opened: null, sameFile: null, suspected: null };
   const sameFile = sameFileOnFile([...records, ...held], item.source);
   if (sameFile) return { ...none, item, error: null, sameFile };
-  const matched = sameTicketOnFile(records, item.ticket);
+  // Its number already on file — or a number one slip of the reader away,
+  // or none at all, on a paper that otherwise is a ticket on file.
+  const exact = sameTicketOnFile(records, item.ticket);
+  const resembling = exact ? null : resemblingTicketOnFile(records, item.ticket);
+  const matched = exact ?? resembling?.record ?? null;
   if (matched) {
-    const result = await saveSuspectedDuplicate(item, matched);
+    const result = await saveSuspectedDuplicate(item, matched, resembling);
     return 'error' in result
       ? { ...none, item: suspectedNote(item, matched), error: result.error }
       : { ...none, item, error: null, suspected: { record: result.record, matched } };
@@ -710,7 +715,11 @@ const sameFileOnFile = (records: SavedRecord[], source: QueueItem['source']) =>
  * Saves a page as a suspected duplicate of `matched`: photograph stored,
  * record saved, held in the duplicates batch on no invoice, its review open.
  */
-function saveSuspectedDuplicate(item: QueueItem, matched: SavedRecord) {
+function saveSuspectedDuplicate(
+  item: QueueItem,
+  matched: SavedRecord,
+  resemblance: Resemblance | null = null,
+) {
   return saveRecord(
     {
       saved_at: new Date().toISOString(),
@@ -727,6 +736,7 @@ function saveSuspectedDuplicate(item: QueueItem, matched: SavedRecord) {
         matched,
         item.ticket.ticket_number ?? '',
         new Date().toISOString(),
+        resemblance,
       ),
     },
     item.original,
@@ -1076,9 +1086,13 @@ function UploadReceiptList({
                 <strong>{t(RECEIPT_OUTCOMES[line.outcome])}</strong>
                 {line.outcome === 'suspected' ? (
                   <small>
-                    {t('Same ticket number as record {id}. Kept and held off every invoice until you compare them.', {
-                      id: line.matchedId!,
-                    })}
+                    {line.resembles
+                      ? t('Looks like record {id}, though its number reads differently. Kept and held off every invoice until you compare them.', {
+                          id: line.matchedId!,
+                        })
+                      : t('Same ticket number as record {id}. Kept and held off every invoice until you compare them.', {
+                          id: line.matchedId!,
+                        })}
                   </small>
                 ) : line.outcome === 'duplicate' ? (
                   <small>
@@ -2782,10 +2796,12 @@ export default function LoadDesk() {
     // A ticket number already on file: kept and held for the side-by-side
     // check, on no invoice. Refusing it here used to leave it in the tab,
     // pointed at the other record, to be lost on the next reload.
-    const matched = sameTicketOnFile(records, active.ticket);
+    const exact = sameTicketOnFile(records, active.ticket);
+    const resembling = exact ? null : resemblingTicketOnFile(records, active.ticket);
+    const matched = exact ?? resembling?.record ?? null;
     if (matched) {
       setBusy(true);
-      const result = await saveSuspectedDuplicate(active, matched);
+      const result = await saveSuspectedDuplicate(active, matched, resembling);
       setBusy(false);
       if ('error' in result) {
         setSaveStatus({ message: result.error, tone: 'error' });

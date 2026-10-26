@@ -2553,3 +2553,13 @@ details[open] > .ld-section-summary .ld-section-chevron {
     grid-template-columns: 1fr;
   }
 }
+/* What a resembling page agrees on with the ticket on file. */
+.ld-dup-reasons {
+  display: grid;
+  gap: 2px;
+  margin-top: var(--ui-space-2);
+  padding-left: var(--ui-space-4);
+  list-style: disc;
+  font-size: var(--type-sm);
+  color: var(--ui-text-2);
+}

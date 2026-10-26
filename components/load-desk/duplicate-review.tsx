@@ -165,6 +165,10 @@ function DuplicateCase({
 }) {
   const { t, date } = useT();
   const review = record.duplicate_review!;
+  // Held because the rest of the paper is that ticket's, not because the
+  // number is: the number as read may well be right, and stands unless it
+  // is corrected.
+  const resembles = review.match === 'resemblance';
   const [mode, setMode] = useState<'ask' | 'different'>('ask');
   const [number, setNumber] = useState(review.read_number);
   // Asked only when no date was read off the page.
@@ -246,9 +250,18 @@ function DuplicateCase({
           {t('Ticket {number}', { number: review.read_number || t('unnumbered') })}
         </strong>
         <span>
-          {t('Record {id} matches record {other}', { id: record.id, other: review.suspected_of })}
+          {resembles
+            ? t('Record {id} resembles record {other}', { id: record.id, other: review.suspected_of })
+            : t('Record {id} matches record {other}', { id: record.id, other: review.suspected_of })}
         </span>
       </div>
+      {resembles && review.reasons?.length ? (
+        <ul className="ld-dup-reasons">
+          {review.reasons.map((reason) => (
+            <li key={reason}>{reason}</li>
+          ))}
+        </ul>
+      ) : null}
       <div className="ld-dup-pair">
         <figure>
           <figcaption>
@@ -370,7 +383,7 @@ function DuplicateCase({
           </small>
           <div className="ld-dup-actions">
             <Button type="submit" disabled={busy}>
-              {t('Correct and file')}
+              {resembles && number.trim() === review.read_number ? t('File as a different ticket') : t('Correct and file')}
             </Button>
             <Button type="button" variant="ghost" disabled={busy} onClick={() => setMode('ask')}>
               {t('Cancel')}
@@ -434,7 +447,7 @@ export default function DuplicateReviewPanel({
       {waiting.length ? (
         <>
           <p className="ld-dup-intro">
-            {t('These pages have a ticket number that is already on file. Each is kept with its photograph and left off every invoice until you say whether it is the same ticket.')}
+            {t('These pages have a ticket number already on file, or one a single misread away from a ticket they otherwise match. Each is kept with its photograph and left off every invoice until you say whether it is the same ticket.')}
           </p>
           <ul className="ld-dup-list">
             {waiting.map((record) => (

@@ -74,6 +74,8 @@ export type ReceiptLine = {
   recordId: number | null;
   /** The record a held page matched, or null. */
   matchedId: number | null;
+  /** Held for looking like that record, not for having its number. */
+  resembles: boolean;
   /** The invoice number the record is on now, or null for none yet. */
   invoice: string | null;
   /** That invoice was opened by this upload, not one already on file. */
@@ -95,6 +97,7 @@ export function receiptLines(receipt: UploadReceipt, records: SavedRecord[]): Re
       ticketNumber: record?.ticket.ticket_number ?? entry.ticketNumber,
       recordId: entry.recordId,
       matchedId: entry.matchedId ?? null,
+      resembles: false,
       invoice: null,
       newInvoice: false,
       detail: entry.detail,
@@ -117,6 +120,7 @@ export function receiptLines(receipt: UploadReceipt, records: SavedRecord[]): Re
       return {
         ...base,
         matchedId: review.suspected_of,
+        resembles: review.match === 'resemblance',
         outcome: review.resolution === 'same' ? 'duplicate' : 'suspected',
         invoice:
           review.resolution === 'same' && theirs && !isPendingInvoiceNumber(theirs) ? theirs : null,

@@ -16,6 +16,7 @@
 
 import { confirmField } from './recovery/resolve.ts';
 import type { RecordEdit } from './record-input.ts';
+import type { Resemblance } from './resemblance.ts';
 import {
   DUPLICATE_BATCH,
   invoicePlacement,
@@ -45,8 +46,17 @@ export type DuplicateAuditEntry = {
 export type DuplicateReview = {
   /** The record this page was taken for a second photograph of. */
   suspected_of: number;
-  /** The ticket number as read off this page, which matched that record's. */
+  /** The ticket number as read off this page. */
   read_number: string;
+  /**
+   * Why it was held: `number`, its number is that record's; `resemblance`,
+   * its number came out different but the rest of the paper is that record's
+   * (resemblance.ts). Absent on pages held before resemblance existed, which
+   * were all held for their number.
+   */
+  match?: 'number' | 'resemblance';
+  /** What the two tickets agree on, for a page held for a resemblance. */
+  reasons?: string[];
   /** null while waiting for a person; then what they said. */
   resolution: 'same' | 'different' | null;
   /** The number a person corrected it to, on "Different ticket". */
@@ -71,22 +81,33 @@ const entry = (action: DuplicateAction, note: string, at: string): DuplicateAudi
   note,
 });
 
-/** The review a page starts with when its number matches `matched`'s. */
-export function suspectDuplicate(matched: SavedRecord, readNumber: string, at: string): DuplicateReview {
+/**
+ * The review a page starts with when its number matches `matched`'s — or,
+ * given `resemblance`, when its number came out different and the rest of the
+ * paper is that ticket's.
+ */
+export function suspectDuplicate(
+  matched: SavedRecord,
+  readNumber: string,
+  at: string,
+  resemblance: Resemblance | null = null,
+): DuplicateReview {
+  const note = resemblance
+    ? `Looks like record ${matched.id} though its number was read as ${readNumber || 'nothing'}. ${resemblance.reasons.join(' ')} Held for review, on no invoice.`
+    : `Ticket number read as ${readNumber}, the number of record ${matched.id}. Held for review, on no invoice.`;
   return {
     suspected_of: matched.id,
     read_number: readNumber,
+    match: resemblance ? 'resemblance' : 'number',
+    ...(resemblance ? { reasons: resemblance.reasons.map((reason) => reason.slice(0, MAX_REASON)) } : {}),
     resolution: null,
     corrected_number: null,
-    history: [
-      entry(
-        'detected',
-        `Ticket number read as ${readNumber}, the number of record ${matched.id}. Held for review, on no invoice.`,
-        at,
-      ),
-    ],
+    history: [entry('detected', note.slice(0, MAX_NOTE), at)],
   };
 }
+
+const MAX_NOTE = 500;
+const MAX_REASON = 300;
 
 export function resolveSame(review: DuplicateReview, at: string): DuplicateReview {
   return {
@@ -245,6 +266,7 @@ export function stampedReview(
     ...incoming,
     suspected_of: stored?.suspected_of ?? incoming.suspected_of,
     read_number: stored?.read_number ?? incoming.read_number,
+    ...(stored ? { match: stored.match, reasons: stored.reasons } : {}),
     history: [...kept, ...added],
   };
 }
@@ -266,6 +288,15 @@ export function parseDuplicateReview(value: unknown): DuplicateReview | null {
   }
   const corrected = review.corrected_number ?? null;
   if (!(corrected === null || isText(corrected, 40))) return null;
+  const match = review.match;
+  if (!(match === undefined || match === 'number' || match === 'resemblance')) return null;
+  const reasons = review.reasons;
+  if (
+    !(reasons === undefined ||
+      (Array.isArray(reasons) && reasons.length <= 6 && reasons.every((reason) => isText(reason, MAX_REASON))))
+  ) {
+    return null;
+  }
   if (!Array.isArray(review.history) || review.history.length > MAX_DUPLICATE_HISTORY) return null;
   const history: DuplicateAuditEntry[] = [];
   for (const step of review.history) {
@@ -274,12 +305,14 @@ export function parseDuplicateReview(value: unknown): DuplicateReview | null {
     if (!isText(at, 40) || Number.isNaN(Date.parse(at))) return null;
     if (!(DUPLICATE_ACTIONS as readonly unknown[]).includes(action)) return null;
     if (!(by === null || by === undefined || isText(by, 200))) return null;
-    if (!isText(note, 500)) return null;
+    if (!isText(note, MAX_NOTE)) return null;
     history.push({ at, action: action as DuplicateAction, by: (by as string | null | undefined) ?? null, note });
   }
   return {
     suspected_of: id,
     read_number: review.read_number,
+    ...(match ? { match } : {}),
+    ...(reasons ? { reasons: reasons as string[] } : {}),
     resolution: review.resolution,
     corrected_number: corrected,
     history,
